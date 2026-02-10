@@ -1,0 +1,275 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libfuse2 file desktop-file-utils
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Download appimagetool
+      run: |
+        wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+        chmod +x appimagetool-x86_64.AppImage
+    
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --name=QualityManagementSystem \
+          --windowed \
+          --onefile \
+          --add-data "migrations:migrations" \
+          --hidden-import=PIL._tkinter_finder \
+          --collect-all reportlab \
+          --collect-submodules sqlalchemy \
+          main.py
+    
+    - name: Create AppDir structure
+      run: |
+        mkdir -p AppDir/usr/bin
+        mkdir -p AppDir/usr/share/applications
+        mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+        mkdir -p AppDir/usr/share/icons/hicolor/scalable/apps
+        
+        # Copy executable
+        cp dist/QualityManagementSystem AppDir/usr/bin/
+        chmod +x AppDir/usr/bin/QualityManagementSystem
+        
+        # Create desktop file
+        cat > AppDir/usr/share/applications/qms.desktop << 'EOF'
+        [Desktop Entry]
+        Name=Quality Management System
+        Exec=QualityManagementSystem
+        Icon=qms
+        Type=Application
+        Categories=Office;Database;
+        Comment=Quality Management and Non-Conformance Tracking System
+        Terminal=false
+        EOF
+        
+        # Create icon (simple colored square with text)
+        convert -size 256x256 xc:#2c3e50 \
+          -fill white -pointsize 72 -gravity center \
+          -annotate +0+0 "QMS" \
+          AppDir/usr/share/icons/hicolor/256x256/apps/qms.png || \
+          echo "ImageMagick not available, creating placeholder icon" && \
+          cp AppDir/usr/share/applications/qms.desktop AppDir/qms.png
+        
+        # Copy desktop file and icon to AppDir root
+        cp AppDir/usr/share/applications/qms.desktop AppDir/
+        cp AppDir/usr/share/icons/hicolor/256x256/apps/qms.png AppDir/ 2>/dev/null || touch AppDir/qms.png
+        
+        # Create AppRun script
+        cat > AppDir/AppRun << 'EOF'
+        #!/bin/bash
+        SELF=$(readlink -f "$0")
+        HERE=${SELF%/*}
+        export PATH="${HERE}/usr/bin:${PATH}"
+        export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
+        cd "${HERE}/usr/bin"
+        exec "${HERE}/usr/bin/QualityManagementSystem" "$@"
+        EOF
+        chmod +x AppDir/AppRun
+    
+    - name: Build AppImage
+      run: |
+        ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run --no-appstream AppDir QualitySystem-${GITHUB_REF_NAME}-x86_64.AppImage
+    
+    - name: Generate checksums
+      run: |
+        sha256sum QualitySystem-${GITHUB_REF_NAME}-x86_64.AppImage > QualitySystem-${GITHUB_REF_NAME}-x86_64.AppImage.sha256
+    
+    - name: Upload AppImage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-appimage
+        path: |
+          QualitySystem-*.AppImage
+          QualitySystem-*.AppImage.sha256
+
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --name=QualityManagementSystem `
+          --windowed `
+          --onefile `
+          --icon=NONE `
+          --add-data "migrations;migrations" `
+          --hidden-import=PIL._tkinter_finder `
+          --collect-all reportlab `
+          --collect-submodules sqlalchemy `
+          main.py
+    
+    - name: Rename executable
+      run: |
+        $version = "$env:GITHUB_REF_NAME"
+        Move-Item "dist\QualityManagementSystem.exe" "QualitySystem-$version-Windows-x86_64.exe"
+    
+    - name: Generate checksums
+      run: |
+        $version = "$env:GITHUB_REF_NAME"
+        $hash = (Get-FileHash "QualitySystem-$version-Windows-x86_64.exe" -Algorithm SHA256).Hash
+        "$hash  QualitySystem-$version-Windows-x86_64.exe" | Out-File -Encoding ASCII "QualitySystem-$version-Windows-x86_64.exe.sha256"
+    
+    - name: Upload Windows executable artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-executable
+        path: |
+          QualitySystem-*.exe
+          QualitySystem-*.exe.sha256
+
+  create-release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Create release notes
+      run: |
+        cat > RELEASE_NOTES.md << EOF
+        # Quality Management System ${GITHUB_REF_NAME}
+        
+        ## Downloads
+        
+        ### Linux
+        - **QualitySystem-${GITHUB_REF_NAME}-x86_64.AppImage** - AppImage for Linux (Ubuntu 20.04+)
+          - Run: \`chmod +x QualitySystem-*.AppImage && ./QualitySystem-*.AppImage\`
+          - Requires: libfuse2 (\`sudo apt install libfuse2\`)
+        
+        ### Windows
+        - **QualitySystem-${GITHUB_REF_NAME}-Windows-x86_64.exe** - Standalone executable for Windows 10/11
+          - Run: Double-click the .exe file
+          - No installation required
+        
+        ## Installation
+        
+        ### Linux
+        1. Download the AppImage file
+        2. Make it executable: \`chmod +x QualitySystem-*.AppImage\`
+        3. Install FUSE if needed: \`sudo apt install libfuse2\`
+        4. Run: \`./QualitySystem-*.AppImage\`
+        
+        ### Windows
+        1. Download the .exe file
+        2. Double-click to run
+        3. Allow Windows Defender/SmartScreen if prompted
+        
+        ## Checksums
+        
+        Verify your download with SHA256 checksums (included in release assets).
+        
+        ## What's New
+        
+        - Quality record management with PDF generation
+        - Non-conformance tracking and reporting
+        - Document management system
+        - Image attachment support
+        - Audit logging
+        - User notifications
+        - Company settings and customization
+        
+        ## System Requirements
+        
+        ### Linux
+        - Ubuntu 20.04+ / Debian 10+ / Fedora 33+ or equivalent
+        - 2GB RAM minimum
+        - 200MB disk space
+        
+        ### Windows
+        - Windows 10 or Windows 11
+        - 2GB RAM minimum
+        - 200MB disk space
+        EOF
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        body_path: RELEASE_NOTES.md
+        draft: false
+        prerelease: false
+        files: |
+          artifacts/linux-appimage/*
+          artifacts/windows-executable/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Generate update_info.json
+      run: |
+        LINUX_FILE=$(ls artifacts/linux-appimage/*.AppImage)
+        WINDOWS_FILE=$(ls artifacts/windows-executable/*.exe)
+        LINUX_SHA256=$(cat artifacts/linux-appimage/*.sha256 | cut -d' ' -f1)
+        WINDOWS_SHA256=$(cat artifacts/windows-executable/*.sha256 | cut -d' ' -f1)
+        
+        cat > update_info.json << EOF
+        {
+          "version": "${GITHUB_REF_NAME#v}",
+          "release_date": "$(date -u +%Y-%m-%d)",
+          "linux": {
+            "url": "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/$(basename $LINUX_FILE)",
+            "sha256": "$LINUX_SHA256",
+            "size_mb": $(stat -f%z "$LINUX_FILE" 2>/dev/null || stat -c%s "$LINUX_FILE" | awk '{print int($1/1048576)}')
+          },
+          "windows": {
+            "url": "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/$(basename $WINDOWS_FILE)",
+            "sha256": "$WINDOWS_SHA256",
+            "size_mb": $(stat -f%z "$WINDOWS_FILE" 2>/dev/null || stat -c%s "$WINDOWS_FILE" | awk '{print int($1/1048576)}')
+          },
+          "release_notes_url": "https://github.com/${{ github.repository }}/releases/tag/${GITHUB_REF_NAME}",
+          "minimum_version": "1.0.0"
+        }
+        EOF
+    
+    - name: Upload update info artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: update-info
+        path: update_info.json

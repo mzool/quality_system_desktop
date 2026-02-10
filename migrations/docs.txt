@@ -1,0 +1,522 @@
+# Quality Management System Database Schema - User Guide
+
+## System Architecture Overview
+
+This database is designed for **any quality management system** (QMS) that needs to:
+- Define quality standards and compliance criteria
+- Create reusable test/inspection templates
+- Execute and record inspections, audits, VQA (Vendor Quality Assurance)
+- Track non-conformances and corrective actions
+- Manage approval workflows
+- Maintain audit trails
+
+---
+
+## 1. USERS AND ROLES SYSTEM
+
+### `roles` Table
+**Why it exists:** Separates permissions from users for flexible access control.
+
+**Real-world usage:**
+- Create roles like "Quality Inspector", "QA Manager", "Auditor", "Admin"
+- Each role has different `permissions` (JSON) defining what they can do
+  ```json
+  {
+    "can_create_records": true,
+    "can_approve": true,
+    "can_close_nc": false,
+    "can_edit_templates": false
+  }
+  ```
+
+### `users` Table
+**Key fields explained:**
+- `username` / `full_name`: Separate login name from display name
+- `role_id`: Links to roles table - change role once, affects all permissions
+- `department`: Filters records by department (e.g., "Production", "QC Lab")
+- `phone`: For urgent notifications about critical non-conformances
+- `is_active`: Disable users without deleting their history
+- `last_login`: Security audit and activity tracking
+- `created_by`: Self-referential - tracks who created each user account
+- `meta`: Store certifications, training records, specializations
+  ```json
+  {
+    "certifications": ["ISO 9001 Lead Auditor", "Six Sigma Green Belt"],
+    "specializations": ["dimensional inspection", "chemical testing"]
+  }
+  ```
+
+---
+
+## 2. STANDARDS AND CRITERIA
+
+### `standards` Table
+**Why it exists:** Companies follow multiple standards (ISO 9001, ISO 14001, IATF 16949, customer-specific requirements).
+
+**Key fields:**
+- `code`: Unique identifier like "ISO-9001", "CUSTOMER-SPEC-ABC"
+- `version`: Standards get updated (ISO 9001:2015 → 2025)
+- `industry`: Filter relevant standards (automotive vs healthcare vs food)
+- `effective_date` / `expiry_date`: Old records reference old versions
+- `is_active`: Don't delete standards - historical records need them
+- `document_url`: Link to PDF of actual standard document
+
+**Example:**
+```sql
+INSERT INTO standards (code, name, version, industry, effective_date)
+VALUES ('ISO-9001', 'Quality Management Systems', '2015', 'general', '2015-09-15');
+```
+
+### `standard_sections` Table
+**Why it exists:** Standards have hierarchical structure (Chapter 4 → Section 4.1 → 4.1.1).
+
+**Usage:** Organize criteria into sections for:
+- Better navigation in UI
+- Grouped reporting
+- Partial audits (audit only section 7.5)
+
+**Example hierarchy:**
+```
+4. Context of the Organization
+  └─ 4.1 Understanding the organization
+  └─ 4.2 Understanding stakeholder needs
+    └─ 4.2.1 Customer requirements
+```
+
+### `standard_criteria` Table
+**Why it exists:** Defines **what to check** during inspections.
+
+**Key fields explained:**
+
+- `code`: Reference number in standard (e.g., "7.5.3.2")
+- `title`: Short name ("Traceability Requirements")
+- `description`: Full text of what must be checked
+- `requirement_type`: 
+  - **mandatory**: Must check always
+  - **conditional**: Check only if condition met
+  - **optional**: Nice to have
+  
+- `data_type`: Determines form field type in UI
+  - `numeric`: Number input (dimensions, temperatures)
+  - `boolean`: Yes/No checkbox (e.g., "Markings present?")
+  - `text`: Free text (observations, comments)
+  - `select`: Dropdown (e.g., "Pass", "Fail", "N/A")
+  - `multiselect`: Multiple choices (defect types)
+  - `date`: Date picker (expiry dates)
+  - `file`: File upload (photos of defects)
+
+- `validation_rules`: JSON rules for data entry
+  ```json
+  {
+    "min": 10.0,
+    "max": 10.5,
+    "regex": "^[A-Z]{2}\\d{4}$",
+    "required": true
+  }
+  ```
+
+- `limit_min` / `limit_max` / `tolerance`: For numeric measurements
+  - Product spec: 50mm ±0.5mm → `limit_min=49.5`, `limit_max=50.5`
+  - Auto-calculate compliance
+
+- `unit`: Display "50 mm" not just "50"
+- `severity`: Prioritize failures
+  - **critical**: Stop production immediately
+  - **major**: Requires corrective action
+  - **minor**: Document and monitor
+
+- `options`: For select/multiselect types
+  ```json
+  ["Conforming", "Non-Conforming", "Not Applicable", "Requires Re-inspection"]
+  ```
+
+- `help_text`: Guide inspectors on what to check
+- `meta.calculation_formula`: Auto-calculate derived values
+  ```json
+  {
+    "calculation_formula": "(diameter * 3.14159)",
+    "dependencies": [criteria_id_for_diameter]
+  }
+  ```
+
+---
+
+## 3. TEST TEMPLATES / SHEETS (The Heart of the System!)
+
+### `test_templates` Table
+**Why it exists:** Don't recreate inspection forms from scratch each time!
+
+**Real-world scenario:**
+You do "Final Product Inspection" daily. Instead of manually adding 50 checkpoints each time, create ONE template that defines:
+- Which criteria to check
+- In what order
+- How they're visually laid out
+- Who needs to approve it
+
+**Key fields:**
+
+- `code`: Unique ID like "VQA-INCOMING-001", "INSP-FIN-VISUAL"
+- `category`: Group similar tests
+  - `inspection`: Product inspections
+  - `audit`: Process/system audits
+  - `vqa`: Vendor quality assessments
+  - `ncr`: Non-conformance reports
+  - `calibration`: Equipment calibration records
+
+- `layout`: Define visual structure
+  ```json
+  {
+    "type": "grid",
+    "columns": 2,
+    "sections": [
+      {"id": "visual", "title": "Visual Checks", "column": 1},
+      {"id": "dimensional", "title": "Measurements", "column": 2}
+    ]
+  }
+  ```
+
+- `sections`: Organize criteria into groups
+  ```json
+  [
+    {"id": "sec1", "title": "Appearance Inspection", "order": 1},
+    {"id": "sec2", "title": "Dimensional Check", "order": 2},
+    {"id": "sec3", "title": "Functional Test", "order": 3}
+  ]
+  ```
+
+- `form_config`: Template behavior
+  ```json
+  {
+    "allow_attachments": true,
+    "require_signature": true,
+    "auto_calculate_compliance": true,
+    "allow_partial_save": true
+  }
+  ```
+
+- `requires_approval` / `approval_levels`: 
+  - Level 0: No approval needed (routine checks)
+  - Level 1: Supervisor approval
+  - Level 2: QA Manager + Production Manager
+  - Level 3: Quality Director sign-off
+
+- `is_active` / `effective_date` / `obsolete_date`: Version control
+  - Update template without affecting old records
+  - "Template v2.0 effective from March 1st"
+
+- `frequency`: Schedule recurring inspections
+  - "daily", "weekly", "monthly", "per_batch", "per_shift"
+  
+- `estimated_duration_minutes`: Plan inspector workload (45 minutes per inspection)
+
+- `required_equipment`: Checklist before starting
+  ```json
+  ["digital caliper", "surface roughness tester", "hardness tester"]
+  ```
+
+- `required_certifications`: Only qualified personnel
+  ```json
+  ["Quality Inspector Level 2", "Dimensional Inspection Certified"]
+  ```
+
+### `template_fields` Table
+**Why it exists:** Maps which criteria appear in which template and HOW they appear.
+
+**Key fields:**
+
+- `template_id` + `criteria_id`: Links template to specific checks
+- `section_key`: Groups fields (matches sections in template.sections)
+- `is_required`: Some checks optional in this context
+- `is_visible`: Hide fields based on context (show "coating thickness" only for coated parts)
+- `sort_order`: Control display order (1, 2, 3...)
+- `default_value`: Pre-fill common values
+- `display_config`: UI customization
+  ```json
+  {
+    "width": "full",
+    "show_help": true,
+    "placeholder": "Enter value in mm",
+    "readonly": false
+  }
+  ```
+
+- `conditional_logic`: Smart forms!
+  ```json
+  {
+    "show_if": {
+      "field_id": 5,
+      "operator": "equals",
+      "value": "yes"
+    }
+  }
+  ```
+  **Example:** Only show "Describe defect" field if "Defect found?" = "yes"
+
+---
+
+## 4. RECORDS (ACTUAL TEST EXECUTIONS)
+
+### `records` Table
+**Why it exists:** Template = blueprint, Record = actual instance.
+
+**Relationship:** Template is like a blank form, Record is the filled-out form.
+
+**Key fields:**
+
+- `record_number`: Unique ID for traceability ("REC-2026-000123")
+- `template_id`: Which template was used
+- `title`: "Final Inspection - Batch B2024-456"
+
+**Lifecycle tracking:**
+- `status`: Workflow state
+  - `draft`: Inspector is filling it out
+  - `submitted`: Ready for review
+  - `under_review`: QA manager reviewing
+  - `approved`: Passed
+  - `rejected`: Failed, needs corrective action
+  - `closed`: Archived
+
+- `priority`: Escalation flag
+  - `critical`: Production-stopping issue
+  - `high`: Needs immediate attention
+  - `medium` / `low`: Standard priority
+
+**Scheduling:**
+- `scheduled_date`: When inspection is planned
+- `started_at`: When inspector began
+- `completed_at`: When finished
+- `due_date`: Must complete by (SLA tracking)
+
+**Context tracking:**
+- `parent_record_id`: Link follow-ups
+  - Original inspection found issue → Follow-up re-inspection
+- `batch_number`: Which production batch ("BATCH-2026-02-09-A")
+- `product_id`: Which product/part number ("PN-12345")
+- `process_id`: Which process step ("STAGE-WELDING")
+- `location`: Where inspection happened ("Line 3, Station 5")
+- `department`: Who owns this ("Production", "Incoming QC")
+- `shift`: Track quality by shift ("Day Shift", "Night Shift")
+
+**Personnel:**
+- `created_by`: Who started the record
+- `assigned_to`: Who should complete it
+- `approved_by`: Who gave final approval
+- `reviewed_by`: Who did mid-level review
+
+**Results summary:**
+- `overall_compliance`: Boolean - did it pass?
+- `compliance_score`: Percentage (85% = 17 out of 20 checks passed)
+- `failed_items_count`: How many criteria failed
+
+**Documentation:**
+- `notes`: Public notes visible to all
+- `internal_notes`: Sensitive info for QA team only
+- `attachments`: Photos, PDFs, videos
+  ```json
+  [
+    {"name": "defect_photo1.jpg", "url": "s3://...", "type": "image/jpeg", "size": 245000},
+    {"name": "measurement_report.pdf", "url": "...", "type": "application/pdf"}
+  ]
+  ```
+
+- `search_vector`: Full-text search capability
+  - Search "scratch on surface" finds relevant records instantly
+
+### `record_items` Table
+**Why it exists:** Stores the actual values for each criterion checked.
+
+**Structure:** One row per criterion per record.
+
+**Key fields:**
+- `record_id` + `criteria_id`: What was checked in which record
+- `template_field_id`: References how it appeared in template
+- `value`: The actual recorded value (text storage)
+  - "10.3" for numeric
+  - "Pass" for select
+  - "Small scratch on left side" for text
+- `numeric_value`: Duplicate for calculations (convert "10.3mm" → 10.3)
+- `compliance`: Auto-calculated or manual
+  - If criteria has limits: auto-calculate from numeric_value
+  - If boolean/select: inspector marks pass/fail
+- `deviation`: How far from target
+  - Spec: 50mm ± 0.5, Measured: 50.8 → deviation = +0.3mm
+- `remarks`: Per-item comments ("Marginal pass, monitor trend")
+- `measured_at` / `measured_by` / `equipment_used`: Full traceability
+
+---
+
+## 5. NON-CONFORMANCE TRACKING
+
+### `non_conformances` Table
+**Why it exists:** When something fails, you need structured corrective action.
+
+**Trigger:** Created when record shows failure or someone reports issue.
+
+**Key fields:**
+- `nc_number`: Unique ID ("NC-2026-0045")
+- `record_id` / `record_item_id`: Link to what failed
+- `severity`: Risk-based prioritization
+  - **critical**: Safety hazard, customer impact
+  - **major**: Specification violation
+  - **minor**: Cosmetic, no functional impact
+
+**8D Problem Solving fields:**
+- `description`: What went wrong
+- `root_cause`: Why it happened (after investigation)
+- `root_cause_category`: "Material", "Method", "Machine", "Man", "Environment"
+- `immediate_action`: Containment (stop shipment, quarantine batch)
+- `corrective_action`: Fix the root cause
+- `preventive_action`: Prevent recurrence
+
+**Timeline:**
+- `detected_date`: When found
+- `target_closure_date`: When it should be resolved
+- `closed_date`: When actually closed
+
+**Status progression:**
+```
+open → investigating → action_planned → implementing → verifying → closed
+```
+
+**Impact:**
+- `cost_impact`: Dollar value of scrap, rework, penalties
+- `customer_impact`: Did customer receive bad parts? (Very serious!)
+
+---
+
+## 6. WORKFLOWS AND APPROVALS
+
+### `workflows` Table
+**Why it exists:** Define approval chains and automated routing.
+
+**Example workflow for "Final Inspection":**
+```json
+{
+  "steps": [
+    {"step": 1, "name": "Inspector Sign-off", "role_id": 2, "sla_hours": 2},
+    {"step": 2, "name": "Supervisor Review", "role_id": 3, "sla_hours": 4},
+    {"step": 3, "name": "QA Manager Approval", "role_id": 4, "sla_hours": 24}
+  ]
+}
+```
+
+- `trigger_event`: "record_submitted", "nc_detected", "template_updated"
+
+### `workflow_instances` Table
+**Why it exists:** Track actual execution of workflow for a specific record.
+
+**Example:** Record #123 is in step 2 of workflow, waiting for supervisor.
+
+### `workflow_step_executions` Table
+**Why it exists:** Track each step's completion.
+
+**Records:**
+- Who was assigned
+- What they did (approve/reject/request changes)
+- When they did it
+- What they said (comments)
+- SLA compliance (due_at vs completed_at)
+
+---
+
+## 7. AUDIT TRAIL
+
+### `audit_log` Table
+**Why it exists:** Regulatory compliance (FDA, ISO) requires you track WHO changed WHAT and WHEN.
+
+**Captures:**
+- `table_name` + `record_id`: What was modified
+- `action`: insert, update, delete
+- `user_id` / `username`: Who did it
+- `old_values` / `new_values`: Before/after snapshot (JSON)
+- `changed_fields`: Quick view of what changed
+- `ip_address` / `user_agent`: Security audit
+
+**Example query:** "Show me who changed the approval status of Record #456"
+
+---
+
+## 8. SUPPORTING SYSTEMS
+
+### `notifications` Table
+**Purpose:** Alert users about tasks, deadlines, issues.
+
+**Examples:**
+- "You have a new inspection assigned"
+- "Record #123 is overdue by 2 days"
+- "Critical NC detected - immediate action required"
+
+### `saved_reports` Table
+**Purpose:** Users create custom reports and save them.
+
+**Example:** "Monthly Compliance Summary by Department" with filters:
+```json
+{
+  "filters": {
+    "department": "Production",
+    "date_range": "last_month",
+    "status": "approved"
+  },
+  "chart_type": "trend"
+}
+```
+
+### `documents` Table
+**Purpose:** Attach SOPs, work instructions, certificates to standards/templates.
+
+**Version control:** When you update a procedure, old records keep referencing old version.
+
+---
+
+## PRACTICAL WORKFLOW EXAMPLE
+
+### Scenario: Daily Final Product Inspection
+
+**Step 1: Setup (One-time)**
+```sql
+-- Create the standard
+INSERT INTO standards (code, name) VALUES ('COMPANY-FPI', 'Final Product Inspection Standard');
+
+-- Add criteria
+INSERT INTO standard_criteria (standard_id, code, title, data_type, limit_min, limit_max)
+VALUES (1, 'DIM-001', 'Overall Length', 'numeric', 99.5, 100.5);
+
+-- Create template
+INSERT INTO test_templates (code, name, standard_id, category)
+VALUES ('FPI-DAILY', 'Daily Final Inspection', 1, 'inspection');
+
+-- Link criteria to template
+INSERT INTO template_fields (template_id, criteria_id, section_key, sort_order)
+VALUES (1, 1, 'dimensional', 1);
+```
+
+**Step 2: Daily Use**
+```sql
+-- Inspector starts a record
+INSERT INTO records (record_number, template_id, batch_number, created_by, status)
+VALUES ('REC-2026-02-09-001', 1, 'BATCH-450', 5, 'draft');
+
+-- Inspector fills in measurements
+INSERT INTO record_items (record_id, criteria_id, value, numeric_value, compliance)
+VALUES (1, 1, '100.2', 100.2, true);
+
+-- Inspector submits
+UPDATE records SET status = 'submitted', completed_at = NOW() WHERE id = 1;
+
+-- Workflow automatically assigns to supervisor
+-- Supervisor approves
+UPDATE records SET status = 'approved', approved_by = 7 WHERE id = 1;
+```
+
+---
+
+## Key Design Principles
+
+1. **Don't delete, deactivate:** `is_active` flags preserve history
+2. **Versioning:** Templates/standards can evolve without breaking old records
+3. **Flexible metadata:** `meta` JSONB fields for future needs
+4. **Full traceability:** Every table tracks who/when created/updated
+5. **Searchable:** Full-text search on records
+6. **Scalable:** Indexes on all foreign keys and frequently queried columns
+
+This schema supports any quality system from simple inspection programs to complex multi-site, multi-standard compliance tracking!

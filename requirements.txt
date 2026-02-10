@@ -1,0 +1,35 @@
+# Quality Management System Requirements
+# Python 3.10+
+
+# Database
+SQLAlchemy>=2.0.0
+
+# GUI Framework
+PyQt6>=6.4.0
+PyQt6-Qt6>=6.4.0
+
+# Excel Support
+openpyxl>=3.1.0
+pandas>=2.0.0
+xlrd>=2.0.1
+
+# PDF Generation
+reportlab>=4.0.0
+
+# Image Processing
+Pillow>=10.0.0
+
+# Optional: For better date handling
+python-dateutil>=2.8.2
+
+# Optional: For data analysis
+numpy>=1.24.0
+# Statistical Charts
+matplotlib>=3.7.0
+scipy>=1.10.0
+
+# Auto-update functionality
+requests>=2.31.0
+
+# Build tools (for creating executables)
+pyinstaller>=6.0.0

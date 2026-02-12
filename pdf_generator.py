@@ -713,8 +713,12 @@ class PDFGenerator:
             # Reverse to get chronological order for charts
             all_records.reverse()
             
-            print(f"Found {len(all_records)} records for template {record.template_id}")
-            print(f"Template has {len(template_fields)} fields")
+            print(f"\nFound {len(all_records)} records for template {record.template_id}")
+            if len(all_records) <= 5:
+                print("Record numbers:")
+                for rec in all_records:
+                    print(f"  - {rec.record_number} (ID: {rec.id}, Status: {rec.status}, Items: {len(rec.items)})")
+            print(f"Template has {len(template_fields)} fields\n")
             
             total_charts_generated = 0
             if all_records and template_fields:
@@ -744,9 +748,9 @@ class PDFGenerator:
                     
                     print(f"  Found {len(values)} values for {criteria.code}")
                     
-                    if len(values) < 2:
-                        print(f"  Skipping - need at least 2 values, only have {len(values)}")
-                        continue  # Need at least 2 values for statistics
+                    if len(values) < 1:
+                        print(f"  Skipping - no values found for {criteria.code}")
+                        continue  # Need at least 1 value to plot
                     
                     # ====================================================================
                     # PAGE FOR THIS CRITERIA
@@ -924,34 +928,23 @@ class PDFGenerator:
         chart_paths = []
         temp_dir = tempfile.gettempdir()
         
-        print(f"Starting chart generation for criteria {criteria.id} in {temp_dir}")
+        print(f"\n{'='*60}")
+        print(f"Starting chart generation for criteria {criteria.id}: {criteria.code}")
+        print(f"Total values received: {len(values)}")
+        print(f"Total record numbers: {len(record_numbers)}")
+        print(f"Total dates: {len(dates)}")
+        print(f"{'='*60}\n")
         
         try:
             # Close any existing figures
             plt.close('all')
             
-            # Organize data into record-based subgroups
-            # This is important since a record can have multiple measurements
-            subgroups = []
-            current_rn = None
-            current_subgroup = []
+            # For control charts, we plot INDIVIDUAL READINGS, not grouped by record
+            # Each reading is a separate data point
+            individual_values = values
+            individual_labels = [f"{record_numbers[i]}-{i+1}" for i in range(len(values))]
             
-            for i, val in enumerate(values):
-                rn = record_numbers[i]
-                if rn != current_rn:
-                    if current_subgroup:
-                        subgroups.append({'rn': current_rn, 'vals': current_subgroup})
-                    current_rn = rn
-                    current_subgroup = []
-                current_subgroup.append(val)
-            if current_subgroup:
-                subgroups.append({'rn': current_rn, 'vals': current_subgroup})
-            
-            # Derived data for charts
-            rec_means = [np.mean(s['vals']) for s in subgroups]
-            rec_ranges = [np.max(s['vals']) - np.min(s['vals']) for s in subgroups]
-            rec_labels = [s['rn'] for s in subgroups]
-            has_subgroups = any(len(s['vals']) > 1 for s in subgroups)
+            print(f"Plotting {len(individual_values)} individual readings as separate points")
             
             # Helper for x-axis labels on large datasets
             def set_smart_xticks(ax, labels, count):
@@ -984,22 +977,10 @@ class PDFGenerator:
             ax1 = fig1.add_subplot(111)
             
             # Plot all individual values
-            ax1.plot(range(len(values)), values, marker='o', linestyle='-', color='#1f77b4', 
-                    linewidth=1.5, markersize=4, alpha=0.7, label='Measurements')
-            
-            # Overlay record averages to show trend clearly
-            # Calculate positions for averages (middle of each subgroup)
-            pos = 0
-            avg_x = []
-            for s in subgroups:
-                avg_x.append(pos + (len(s['vals']) - 1) / 2)
-                pos += len(s['vals'])
-            
-            if has_subgroups:
-                ax1.plot(avg_x, rec_means, marker='s', linestyle='--', color='darkblue', 
-                        linewidth=2, markersize=6, label='Record Average')
+            ax1.plot(range(len(individual_values)), individual_values, marker='o', linestyle='-', color='#1f77b4', 
+                    linewidth=1.5, markersize=6, alpha=0.8, label='Individual Readings')
 
-            ax1.axhline(y=mean_val, color='r', linestyle='--', alpha=0.6, label=f'Grand Average: {mean_val:.2f}')
+            ax1.axhline(y=mean_val, color='r', linestyle='--', alpha=0.6, linewidth=2, label=f'Average: {mean_val:.2f}')
             
             if criteria.limit_min is not None:
                 ax1.axhline(y=float(criteria.limit_min), color='orange', linestyle='-', linewidth=1,
@@ -1008,16 +989,10 @@ class PDFGenerator:
                 ax1.axhline(y=float(criteria.limit_max), color='orange', linestyle='-', linewidth=1,
                           label=f'Upper Limit: {criteria.limit_max}')
             
-            ax1.set_xlabel('Record Sequence', fontsize=10)
+            ax1.set_xlabel('Reading Number', fontsize=10)
             ax1.set_ylabel(f'Value {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
             ax1.set_title(f'Trend Analysis: {criteria.code} - {criteria.title}', fontsize=12, fontweight='bold')
-            
-            # Smart labels for individual points might be too crowded, so we label by record index
-            sample_labels = []
-            for s in subgroups:
-                for _ in range(len(s['vals'])):
-                    sample_labels.append(s['rn'])
-            set_smart_xticks(ax1, sample_labels, len(values))
+            set_smart_xticks(ax1, individual_labels, len(individual_values))
             
             ax1.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1, 1))
             ax1.grid(True, alpha=0.3)
@@ -1030,37 +1005,39 @@ class PDFGenerator:
             if os.path.exists(line_chart_path):
                 chart_paths.append(line_chart_path)
             
-            # 2. X-BAR CHART (Control Chart for Averages)
-            print("Generating X-bar chart...")
+            # 2. INDIVIDUALS CHART (X-chart, not X-bar) - Plot each reading
+            print("\n--- Generating Individuals (X) Control Chart ---")
             fig2 = plt.figure(figsize=(10, 5))
             ax2 = fig2.add_subplot(111)
             
-            # Use rec_means for X-bar chart instead of all points
-            data_to_plot = rec_means
-            labels_to_plot = rec_labels
+            # Calculate control limits using Moving Range method
+            moving_ranges = [abs(individual_values[i] - individual_values[i-1]) for i in range(1, len(individual_values))]
+            avg_moving_range = np.mean(moving_ranges) if moving_ranges else 0
             
-            # Calculate control limits for the records
-            grand_avg = np.mean(data_to_plot)
-            # Use standard deviation of the record means for control limits
-            std_of_means = np.std(data_to_plot, ddof=1) if len(data_to_plot) > 1 else 0
-            ucl = grand_avg + 3 * std_of_means
-            lcl = grand_avg - 3 * std_of_means
+            # Control limits for individuals chart (using mR/d2 where d2=1.128 for n=2)
+            grand_avg = mean_val
+            ucl = grand_avg + 2.66 * avg_moving_range  # 2.66 = 3/d2
+            lcl = grand_avg - 2.66 * avg_moving_range
             
-            ax2.plot(range(len(data_to_plot)), data_to_plot, marker='o', linestyle='-', 
+            print(f"Individuals chart - Points to plot: {len(individual_values)}")
+            print(f"Moving range average: {avg_moving_range:.2f}")
+            print(f"Control limits - UCL: {ucl:.2f}, Center: {grand_avg:.2f}, LCL: {lcl:.2f}")
+            
+            ax2.plot(range(len(individual_values)), individual_values, marker='o', linestyle='-', 
                     linewidth=2, markersize=7, color='#2ca02c')
             ax2.axhline(y=grand_avg, color='green', linestyle='-', linewidth=2, label=f'X̄: {grand_avg:.2f}')
             ax2.axhline(y=ucl, color='red', linestyle='--', linewidth=1.5, label=f'UCL: {ucl:.2f}')
             ax2.axhline(y=lcl, color='red', linestyle='--', linewidth=1.5, label=f'LCL: {lcl:.2f}')
             
             # Highlight out-of-control points
-            for i, val in enumerate(data_to_plot):
+            for i, val in enumerate(individual_values):
                 if val > ucl or val < lcl:
                     ax2.plot(i, val, 'rx', markersize=12, markeredgewidth=2)
             
-            ax2.set_xlabel('Record Number', fontsize=10)
-            ax2.set_ylabel(f'Average Value {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
-            ax2.set_title(f'X-bar Control Chart: {criteria.code}', fontsize=12, fontweight='bold')
-            set_smart_xticks(ax2, labels_to_plot, len(data_to_plot))
+            ax2.set_xlabel('Reading Number', fontsize=10)
+            ax2.set_ylabel(f'Value {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
+            ax2.set_title(f'Individuals (X) Control Chart: {criteria.code}', fontsize=12, fontweight='bold')
+            set_smart_xticks(ax2, individual_labels, len(individual_values))
             ax2.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1, 1))
             ax2.grid(True, alpha=0.3)
             
@@ -1072,61 +1049,54 @@ class PDFGenerator:
             if os.path.exists(xbar_chart_path):
                 chart_paths.append(xbar_chart_path)
             
-            # 3. R CHART (Range Chart)
-            # If we have subgroups, plot ranges. Otherwise, plot Moving Ranges
-            print("Generating R chart...")
-            fig3 = plt.figure(figsize=(10, 5))
-            ax3 = fig3.add_subplot(111)
-            
-            char_type = "Range"
-            if has_subgroups:
-                # Subgroup Range Chart
-                r_values = rec_ranges
-                r_labels = rec_labels
-                char_type = "Range (R)"
-                avg_r = np.mean(r_values)
-                # Simple 3-sigma limits for range
-                ucl_r = avg_r + 3 * np.std(r_values, ddof=1) if len(r_values) > 1 else avg_r * 2.5
+            # 3. MOVING RANGE (mR) CHART
+            # Only generate if we have at least 2 values (so at least 1 moving range)
+            if len(moving_ranges) > 0:
+                print("\n--- Generating Moving Range (mR) Chart ---")
+                fig3 = plt.figure(figsize=(10, 5))
+                ax3 = fig3.add_subplot(111)
+                
+                # Moving ranges already calculated above
+                mr_labels = individual_labels[1:]  # Skip first reading (no previous to compare)
+                avg_mr = avg_moving_range
+                ucl_mr = avg_mr * 3.267  # D4 constant for n=2
+                
+                print(f"Moving Range chart - Points to plot: {len(moving_ranges)}")
+                print(f"Average mR: {avg_mr:.2f}, UCL: {ucl_mr:.2f}")
+                
+                ax3.plot(range(len(moving_ranges)), moving_ranges, marker='o', 
+                       linestyle='-', linewidth=2, markersize=6, color='#9467bd')
+                ax3.axhline(y=avg_mr, color='green', linestyle='-', linewidth=2, 
+                          label=f'Average mR: {avg_mr:.2f}')
+                ax3.axhline(y=ucl_mr, color='red', linestyle='--', linewidth=1.5, 
+                          label=f'UCL: {ucl_mr:.2f}')
+                ax3.axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='LCL: 0.00')
+                
+                # Highlight out-of-control
+                for i, mr in enumerate(moving_ranges):
+                    if mr > ucl_mr:
+                        ax3.plot(i, mr, 'rx', markersize=12, markeredgewidth=2)
+                
+                ax3.set_xlabel('Reading Number', fontsize=10)
+                ax3.set_ylabel(f'Moving Range {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
+                ax3.set_title(f'Moving Range (mR) Control Chart: {criteria.code}', fontsize=12, fontweight='bold')
+                set_smart_xticks(ax3, mr_labels, len(moving_ranges))
+                ax3.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1, 1))
+                ax3.grid(True, alpha=0.3)
+                
+                r_chart_path = os.path.join(temp_dir, f'r_chart_{criteria.id}_{os.getpid()}.png')
+                plt.tight_layout()
+                fig3.savefig(r_chart_path, dpi=150, bbox_inches='tight', format='png')
+                plt.close(fig3)
+                
+                if os.path.exists(r_chart_path):
+                    chart_paths.append(r_chart_path)
             else:
-                # Moving Range Chart
-                char_type = "Moving Range (mR)"
-                # Calculate moving ranges BUT ONLY within records if they had multiple points
-                # (though has_subgroups=False means they all have 1 point)
-                # So it's a standard mR chart across individual records
-                r_values = [abs(values[i] - values[i-1]) for i in range(1, len(values))]
-                r_labels = record_numbers[1:] # Skip first label
-                avg_r = np.mean(r_values)
-                ucl_r = avg_r * 3.267 # D4 for n=2
+                print("\n--- Skipping Moving Range Chart (need at least 2 values) ---")
             
-            ax3.plot(range(len(r_values)), r_values, marker='o', 
-                   linestyle='-', linewidth=2, markersize=6, color='#9467bd')
-            ax3.axhline(y=avg_r, color='green', linestyle='-', linewidth=2, 
-                      label=f'Average {char_type}: {avg_r:.2f}')
-            ax3.axhline(y=ucl_r, color='red', linestyle='--', linewidth=1.5, 
-                      label=f'UCL: {ucl_r:.2f}')
-            ax3.axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='LCL: 0.00')
-            
-            # Highlight out-of-control
-            for i, r in enumerate(r_values):
-                if r > ucl_r:
-                    ax3.plot(i, r, 'rx', markersize=12, markeredgewidth=2)
-            
-            ax3.set_xlabel('Record Number', fontsize=10)
-            ax3.set_ylabel(f'{char_type} {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
-            ax3.set_title(f'{char_type} Control Chart: {criteria.code}', fontsize=12, fontweight='bold')
-            set_smart_xticks(ax3, r_labels, len(r_values))
-            ax3.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1, 1))
-            ax3.grid(True, alpha=0.3)
-            
-            r_chart_path = os.path.join(temp_dir, f'r_chart_{criteria.id}_{os.getpid()}.png')
-            plt.tight_layout()
-            fig3.savefig(r_chart_path, dpi=150, bbox_inches='tight', format='png')
-            plt.close(fig3)
-            
-            if os.path.exists(r_chart_path):
-                chart_paths.append(r_chart_path)
-            
-            print(f"Chart generation complete. Generated {len(chart_paths)} charts.")
+            print(f"\nChart generation complete. Generated {len(chart_paths)} charts.")
+            print(f"Chart paths: {chart_paths}")
+            print(f"{'='*60}\n")
             
         except Exception as e:
             print(f"Error generating charts: {e}")
@@ -1795,9 +1765,9 @@ class PDFGenerator:
                 
                 print(f"  Found {len(values)} values for {criteria.code}")
                 
-                if len(values) < 2:
-                    print(f"  Skipping - need at least 2 values, only have {len(values)}")
-                    continue  # Need at least 2 values for statistics
+                if len(values) < 1:
+                    print(f"  Skipping - no values found for {criteria.code}")
+                    continue  # Need at least 1 value to plot
                 
                 # Page for this criteria
                 elements.append(Paragraph(f"Criterion: {criteria.code} - {criteria.title}", 

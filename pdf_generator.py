@@ -708,7 +708,7 @@ class PDFGenerator:
             # Include all statuses, not just completed
             all_records = self.session.query(Record).filter_by(
                 template_id=record.template_id
-            ).order_by(Record.created_at.desc()).limit(100).all()  # Limit to last 100 records
+            ).order_by(Record.created_at.desc()).limit(500).all()  # Limit to last 500 records
             
             # Reverse to get chronological order for charts
             all_records.reverse()
@@ -955,13 +955,27 @@ class PDFGenerator:
             
             # Helper for x-axis labels on large datasets
             def set_smart_xticks(ax, labels, count):
-                ax.set_xticks(range(count))
-                if count > 20:
-                    # Show only every Nth label to avoid overlap
-                    step = max(1, count // 10)
-                    display_labels = [labels[i] if i % step == 0 else "" for i in range(count)]
+                # Always show all data points on the plot
+                ax.set_xlim(-0.5, count - 0.5)  # Ensure all points are visible
+                
+                if count > 30:
+                    # For large datasets, show sparse labels to avoid overlap
+                    step = max(1, count // 15)  # Show ~15 labels max
+                    tick_positions = [i for i in range(0, count, step)]
+                    # Make sure we show first and last
+                    if (count - 1) not in tick_positions:
+                        tick_positions.append(count - 1)
+                    tick_labels = [labels[i] for i in tick_positions]
+                    ax.set_xticks(tick_positions)
+                    ax.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=8)
+                elif count > 15:
+                    # Medium datasets - show every other label
+                    ax.set_xticks(range(count))
+                    display_labels = [labels[i] if i % 2 == 0 or i == count-1 else "" for i in range(count)]
                     ax.set_xticklabels(display_labels, rotation=45, ha='right', fontsize=8)
                 else:
+                    # Small datasets - show all labels
+                    ax.set_xticks(range(count))
                     ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
 
             # 1. LINE CHART (Individual measurements)

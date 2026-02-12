@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QHeaderView
 )
 from PyQt6.QtCore import Qt, QDate, QTimer
-from PyQt6.QtGui import QAction, QFont, QImage, QPixmap
+from PyQt6.QtGui import QAction, QFont, QImage, QPixmap, QPalette, QColor
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
@@ -7304,13 +7304,22 @@ class MainWindow(QMainWindow):
     def check_for_updates(self):
         """Check for application updates"""
         if not UPDATER_AVAILABLE:
+            QMessageBox.information(self, "Updates", "Update checker is not available.\nPlease install 'requests' package.")
             return
         
         try:
             updater = Updater()
+            print(f"Checking for updates from: {updater.update_url}")
+            print(f"Current version: {updater.current_version}")
+            
             update_info = updater.check_for_updates()
             
-            if update_info and update_info.get('available'):
+            if update_info is None:
+                QMessageBox.warning(self, "Update Check Failed", 
+                                   "Could not check for updates.\n\nPlease check your internet connection.")
+                return
+            
+            if update_info.get('available'):
                 # Show update dialog
                 from PyQt6.QtCore import Qt
                 reply = QMessageBox.question(
@@ -7327,6 +7336,9 @@ class MainWindow(QMainWindow):
                 
                 if reply == QMessageBox.StandardButton.Yes:
                     self.download_and_install_update(updater, update_info)
+            else:
+                QMessageBox.information(self, "No Updates", 
+                                       f"You are running the latest version ({__version__})")
         except Exception as e:
             print(f"Update check failed: {e}")
     
@@ -9084,6 +9096,23 @@ def main():
     
     # Set application style
     app.setStyle('Fusion')
+    
+    # Set light palette for consistent appearance across platforms
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 220))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+    palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    app.setPalette(palette)
     
     # Create and show main window
     window = MainWindow()

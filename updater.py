@@ -31,13 +31,18 @@ class Updater:
                   or None if check fails
         """
         try:
+            print(f"Checking for updates at: {self.update_url}")
             # Request version info from server
             response = requests.get(self.update_url, timeout=5)
+            
+            print(f"Response status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 
                 latest_version = data.get('version', '0.0.0')
+                print(f"Latest version from server: {latest_version}")
+                print(f"Current version: {self.current_version}")
                 
                 # Get platform-specific download URL
                 if self.system == 'Windows':
@@ -51,8 +56,12 @@ class Updater:
                 release_notes_url = data.get('release_notes_url', '')
                 size_mb = platform_data.get('size_mb', 0)
                 
+                print(f"Download URL: {download_url}")
+                print(f"Size: {size_mb}MB")
+                
                 # Compare versions
                 if self._is_newer_version(latest_version, self.current_version):
+                    print("Update available!")
                     return {
                         'available': True,
                         'version': latest_version,
@@ -61,6 +70,7 @@ class Updater:
                         'size_mb': size_mb
                     }
                 else:
+                    print("Already running latest version")
                     return {
                         'available': False,
                         'version': self.current_version,
@@ -68,6 +78,8 @@ class Updater:
                         'notes': 'You are running the latest version'
                     }
             else:
+                print(f"HTTP error: {response.status_code}")
+                return None
                 return None
                 
         except Exception as e:

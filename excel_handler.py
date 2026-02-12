@@ -273,92 +273,109 @@ class ExcelHandler:
         ws['A4'] = "Date:"
         ws['B4'] = record.completed_at.strftime('%Y-%m-%d %H:%M') if record.completed_at else ''
         
-        # Data table header
-        current_row = 6
-        headers = ['Criteria', 'Value', 'Unit', 'Compliance', 'Deviation', 'Remarks']
-        
-        for col, header in enumerate(headers, 1):
-            cell = ws.cell(row=current_row, column=col)
-            cell.value = header
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal='center', vertical='center')
-            cell.border = border
-        
-        # Data rows
-        current_row += 1
-        numeric_values = []  # For statistics
-        
+        # Group record items by criteria
+        from collections import defaultdict
+        criteria_groups = defaultdict(list)
         for item in record.items:
-            criteria_name = item.criteria.title if item.criteria else 'Unknown'
+            if item.criteria:
+                criteria_groups[item.criteria].append(item)
+        
+        # Sort criteria based on template order if possible
+        if record.template and record.template.fields:
+            field_order = {f.criteria_id: f.sort_order for f in record.template.fields}
+            sorted_criteria = sorted(criteria_groups.keys(), key=lambda c: field_order.get(c.id, 999))
+        else:
+            sorted_criteria = sorted(criteria_groups.keys(), key=lambda c: c.title or "")
+
+        # Labels for statistics in Column A
+        ws['A6'] = "STATISTICS"
+        ws['A6'].font = Font(bold=True, size=12)
+        ws['A7'] = "Unit"
+        ws['A8'] = "Min Limit"
+        ws['A9'] = "Max Limit"
+        ws['A10'] = "Sample Count"
+        ws['A11'] = "Average"
+        ws['A12'] = "Minimum"
+        ws['A13'] = "Maximum"
+        ws['A14'] = "Range"
+        ws['A15'] = "Std Deviation"
+        
+        for row in range(7, 16):
+            cell = ws[f'A{row}']
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
+            cell.border = border
+
+        # Data starts from Row 6 across columns B, C, D...
+        col_idx = 2
+        for crit in sorted_criteria:
+            col_letter = get_column_letter(col_idx)
             
-            # Format value nicely
-            if item.numeric_value is not None:
-                value_text = format_number(float(item.numeric_value))
-                numeric_values.append(float(item.numeric_value))
+            # Criteria Header
+            header_cell = ws[f'{col_letter}6']
+            header_cell.value = crit.title
+            header_cell.font = header_font
+            header_cell.fill = header_fill
+            header_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            header_cell.border = border
+            
+            items = criteria_groups[crit]
+            numeric_vals = [float(item.numeric_value) for item in items if item.numeric_value is not None]
+            
+            # Unit & Limits
+            ws[f'{col_letter}7'] = crit.unit or '-'
+            ws[f'{col_letter}8'] = format_number(float(crit.limit_min)) if crit.limit_min is not None else '-'
+            ws[f'{col_letter}9'] = format_number(float(crit.limit_max)) if crit.limit_max is not None else '-'
+            
+            # Calculate and set statistics
+            if numeric_vals:
+                v_arr = np.array(numeric_vals)
+                ws[f'{col_letter}10'] = len(numeric_vals)
+                ws[f'{col_letter}11'] = format_number(np.mean(v_arr))
+                ws[f'{col_letter}12'] = format_number(np.min(v_arr))
+                ws[f'{col_letter}13'] = format_number(np.max(v_arr))
+                ws[f'{col_letter}14'] = format_number(np.max(v_arr) - np.min(v_arr))
+                ws[f'{col_letter}15'] = format_number(np.std(v_arr, ddof=1) if len(numeric_vals) > 1 else 0)
             else:
-                value_text = item.value or ''
+                for row in range(10, 16):
+                    ws[f'{col_letter}{row}'] = 'N/A'
             
-            unit = item.criteria.unit if item.criteria else ''
-            compliance = 'Pass' if item.compliance else 'Fail' if item.compliance is not None else ''
-            deviation = format_number(float(item.deviation)) if item.deviation is not None else ''
-            remarks = item.remarks or ''
+            # Apply borders to stats cells
+            for row in range(7, 16):
+                ws[f'{col_letter}{row}'].border = border
+                ws[f'{col_letter}{row}'].alignment = Alignment(horizontal='center')
+
+            # Readings Section
+            reading_header = ws[f'{col_letter}17']
+            reading_header.value = "READINGS"
+            reading_header.font = Font(bold=True, color='366092')
+            reading_header.alignment = Alignment(horizontal='center')
             
-            row_data = [criteria_name, value_text, unit, compliance, deviation, remarks]
-            
-            for col, value in enumerate(row_data, 1):
-                cell = ws.cell(row=current_row, column=col)
-                cell.value = value
-                cell.border = border
+            # Individual reading values
+            curr_row = 18
+            for item in items:
+                cell = ws.cell(row=curr_row, column=col_idx)
+                if item.numeric_value is not None:
+                    cell.value = float(item.numeric_value)
+                else:
+                    cell.value = item.value or ''
                 
-                # Compliance color coding
-                if col == 4:
-                    if value == 'Pass':
-                        cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
-                        cell.font = Font(color='006100', bold=True)
-                    elif value == 'Fail':
-                        cell.fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
-                        cell.font = Font(color='9C0006', bold=True)
+                cell.border = border
+                cell.alignment = Alignment(horizontal='center')
+                
+                # Color code compliance
+                if item.compliance is False:
+                    cell.fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                elif item.compliance is True:
+                    cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                
+                curr_row += 1
             
-            current_row += 1
-        
-        # Statistics section (if numeric values exist)
-        if numeric_values:
-            current_row += 2
-            stats_row = current_row
+            # Set column width
+            ws.column_dimensions[col_letter].width = max(15, len(crit.title) / 2 + 5)
+            col_idx += 1
             
-            ws.merge_cells(f'A{stats_row}:B{stats_row}')
-            stats_title = ws[f'A{stats_row}']
-            stats_title.value = "Statistics"
-            stats_title.font = Font(bold=True, size=12)
-            stats_title.fill = PatternFill(start_color='D9E1F2', end_color='D9E1F2', fill_type='solid')
-            
-            current_row += 1
-            
-            # Calculate statistics
-            values_array = np.array(numeric_values)
-            stats_data = [
-                ['Count', len(numeric_values)],
-                ['Average', format_number(np.mean(values_array))],
-                ['Std Deviation', format_number(np.std(values_array, ddof=1) if len(numeric_values) > 1 else 0)],
-                ['Minimum', format_number(np.min(values_array))],
-                ['Maximum', format_number(np.max(values_array))],
-                ['Range', format_number(np.max(values_array) - np.min(values_array))],
-            ]
-            
-            for stat_name, stat_value in stats_data:
-                ws[f'A{current_row}'] = stat_name
-                ws[f'B{current_row}'] = stat_value
-                ws[f'A{current_row}'].font = Font(bold=True)
-                current_row += 1
-        
-        # Auto-adjust column widths
-        ws.column_dimensions['A'].width = 30  # Criteria name
-        ws.column_dimensions['B'].width = 15  # Value
-        ws.column_dimensions['C'].width = 10  # Unit
-        ws.column_dimensions['D'].width = 12  # Compliance
-        ws.column_dimensions['E'].width = 12  # Deviation
-        ws.column_dimensions['F'].width = 30  # Remarks
+        ws.column_dimensions['A'].width = 20
         
         wb.save(filepath)
         return filepath

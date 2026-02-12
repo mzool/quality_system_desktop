@@ -1,0 +1,16 @@
+{
+  "version": "1.0.0",
+  "release_date": "2026-02-12",
+  "linux": {
+    "url": "https://github.com/mzool/quality_system_desktop/releases/download/v1.0.0/QualitySystem-v1.0.0-x86_64.AppImage",
+    "sha256": "",
+    "size_mb": 0
+  },
+  "windows": {
+    "url": "https://github.com/mzool/quality_system_desktop/releases/download/v1.0.0/QualitySystem-v1.0.0-Windows-x86_64.exe",
+    "sha256": "",
+    "size_mb": 0
+  },
+  "release_notes_url": "https://github.com/mzool/quality_system_desktop/releases/tag/v1.0.0",
+  "minimum_version": "1.0.0"
+}

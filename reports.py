@@ -301,7 +301,7 @@ class ReportsGenerator:
     # ========================================================================
     
     def inspector_performance_report(self, start_date: datetime = None,
-                                    end_date: datetime = None) -> list:
+                                    end_date: datetime = None) -> dict:
         """
         Report on inspector performance
         
@@ -310,7 +310,7 @@ class ReportsGenerator:
             end_date: End date for filtering
             
         Returns:
-            List of inspector performance data
+            Dictionary containing list of inspector performance data and overall metrics
         """
         query = self.session.query(
             User.id,
@@ -333,24 +333,37 @@ class ReportsGenerator:
             func.count(Record.id).desc()
         )
         
-        results = []
+        inspectors = []
+        total_records_sum = 0
+        total_passed_sum = 0
+        total_weighted_score = 0
+        
         for row in query.all():
             total = row.total_inspections
             passed = row.passed or 0
             failed = row.failed or 0
+            avg_score = float(row.avg_score or 0)
             
-            results.append({
+            inspectors.append({
                 'inspector_id': row.id,
-                'name': row.full_name,
+                'inspector': row.full_name,
                 'department': row.department,
-                'total_inspections': total,
+                'total_records': total,
                 'passed': int(passed),
                 'failed': int(failed),
                 'pass_rate': round((passed / total * 100) if total > 0 else 0, 2),
-                'avg_score': round(float(row.avg_score or 0), 2)
+                'avg_score': round(avg_score, 2)
             })
+            
+            total_records_sum += total
+            total_passed_sum += passed
+            total_weighted_score += (avg_score * total)
         
-        return results
+        return {
+            'inspectors': inspectors,
+            'overall_pass_rate': round((total_passed_sum / total_records_sum * 100) if total_records_sum > 0 else 0, 2),
+            'overall_avg_score': round((total_weighted_score / total_records_sum) if total_records_sum > 0 else 0, 2)
+        }
     
     def department_performance_report(self) -> list:
         """

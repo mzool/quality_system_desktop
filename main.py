@@ -3,16 +3,26 @@ Main Application - Quality Management System
 Multiplatform Desktop Application using PyQt6
 """
 import sys
+import os
+
+# Set environment variables for better Linux stability
+if sys.platform == 'linux':
+    # Force gstreamer if available, but if FFmpeg is already loaded, these might not help
+    os.environ["QT_MULTIMEDIA_BACKEND"] = "gstreamer"
+    os.environ["GST_DEBUG"] = "1"  # Error only
+    # Ensure local directory is in path
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
     QMessageBox, QFileDialog, QToolBar, QStatusBar, QGroupBox,
     QDialog, QFormLayout, QLineEdit, QTextEdit, QComboBox, QDateEdit,
     QCheckBox, QSpinBox, QDoubleSpinBox, QDialogButtonBox, QScrollArea,
-    QInputDialog
+    QInputDialog, QHeaderView
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtCore import Qt, QDate, QTimer
+from PyQt6.QtGui import QAction, QFont, QImage, QPixmap
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
@@ -24,13 +34,6 @@ from excel_handler import ExcelHandler
 from pdf_generator import PDFGenerator
 from image_handler import ImageHandler
 from reports import ReportsGenerator
-from version import __version__, __app_name__
-try:
-    from updater import Updater
-    UPDATER_AVAILABLE = True
-except ImportError:
-    UPDATER_AVAILABLE = False
-    print("Updater module not available")
 from version import __version__, __app_name__
 try:
     from updater import Updater
@@ -213,7 +216,7 @@ class RecordDialog(QDialog):
         # Info label
         info_label = QLabel("Select a template to automatically load all criteria fields. Fill in values directly in the table.\n"
                            "✓ Pass/Fail is automatically calculated based on min/max/tolerance limits | You can override manually if needed")
-        info_label.setStyleSheet("color: #366092; padding: 5px; background-color: #E7E6E6;")
+        info_label.setStyleSheet("color: #2f3542; padding: 10px; background-color: #e3f2fd; border-radius: 4px; border-left: 5px solid #1e90ff;")
         info_label.setWordWrap(True)
         items_layout.addWidget(info_label)
         
@@ -480,15 +483,6 @@ class RecordDialog(QDialog):
                 if form_config.get('allow_draft'):
                     config_info.append("  • Draft mode allowed")
             
-            # Display info to user
-            if config_info:
-                info_message = "<br/>".join(config_info)
-                QMessageBox.information(
-                    self, 
-                    "Template Configuration Applied",
-                    f"<html>{info_message}<br/><br/><i>This template has {len(template.fields)} fields configured.</i></html>"
-                )
-            
         except Exception as e:
             print(f"Error loading template configuration: {e}")
     
@@ -606,7 +600,7 @@ class RecordDialog(QDialog):
             self.items_table.setItem(row_idx, 2, code_item)
             
             # Title (read-only)
-            title_item = QTableWidgetItem(criteria.title if criteria else field.label)
+            title_item = QTableWidgetItem(criteria.title if criteria else "Untitled")
             title_item.setFlags(title_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             title_item.setBackground(Qt.GlobalColor.lightGray)
             self.items_table.setItem(row_idx, 3, title_item)
@@ -637,10 +631,7 @@ class RecordDialog(QDialog):
         # Reconnect signal
         self.items_table.cellChanged.connect(self.on_item_cell_changed)
         
-        QMessageBox.information(self, "Success", 
-                               f"Added {len(template_fields)} field(s) from template.\n"
-                               f"Total items in table: {self.items_table.rowCount()}\n"
-                               "You can add the same fields multiple times if needed.")
+        self.parent().statusbar.showMessage(f"Added {len(template_fields)} field(s) from template", 3000)
     
     def clear_all_items(self):
         """Clear all items from the table"""
@@ -1907,7 +1898,7 @@ class TemplateDialog(QDialog):
         
         # Layout Configuration
         layout_label = QLabel("Layout Configuration - Controls how the form looks")
-        layout_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #366092;")
+        layout_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #2f3542;")
         info_layout.addRow(layout_label)
         
         layout_help = QLabel("<i>These settings control how fields are displayed when users create records.</i>")
@@ -1945,7 +1936,7 @@ class TemplateDialog(QDialog):
         
         # Sections Configuration
         sections_label = QLabel("Sections Configuration - Group fields into categories")
-        sections_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #366092;")
+        sections_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #2f3542;")
         info_layout.addRow(sections_label)
         
         sections_help = QLabel("<i>Divide the form into sections (e.g., 'General Info', 'Measurements', 'Results')</i>")
@@ -1960,7 +1951,7 @@ class TemplateDialog(QDialog):
         
         # Form Configuration
         form_config_label = QLabel("Form Configuration - Control user interaction")
-        form_config_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #366092;")
+        form_config_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #2f3542;")
         info_layout.addRow(form_config_label)
         
         form_help = QLabel("<i>These settings control how users can fill out and submit the form.</i>")
@@ -2556,6 +2547,24 @@ class TemplateDialog(QDialog):
                 self.session.add(field)
             
             self.session.commit()
+            
+            # Audit logging
+            action = 'update' if self.template else 'insert'
+            try:
+                log_entry = AuditLog(
+                    table_name='templates',
+                    record_id=template.id,
+                    action=action,
+                    user_id=self.current_user.id,
+                    username=self.current_user.full_name,
+                    new_values={'name': template.name, 'code': template.code, 'version': template.version},
+                    timestamp=datetime.now()
+                )
+                self.session.add(log_entry)
+                self.session.commit()
+            except:
+                pass
+            
             self.accept()
             
         except Exception as e:
@@ -2760,6 +2769,40 @@ class StandardDialog(QDialog):
         meta_layout.addWidget(self.meta_table)
         
         tabs.addTab(meta_widget, "Custom Fields")
+
+        # Tab 5: Attachments
+        attachments_widget = QWidget()
+        attachments_layout = QVBoxLayout()
+        attachments_widget.setLayout(attachments_layout)
+        
+        # Toolbar for attachments
+        attachments_toolbar = QHBoxLayout()
+        btn_add_image = QPushButton("Attach Image")
+        btn_add_image.clicked.connect(self.attach_image)
+        btn_view_image = QPushButton("View Selected")
+        btn_view_image.clicked.connect(self.view_image)
+        btn_delete_image = QPushButton("Delete Selected")
+        btn_delete_image.clicked.connect(self.delete_image)
+        
+        attachments_toolbar.addWidget(btn_add_image)
+        attachments_toolbar.addWidget(btn_view_image)
+        attachments_toolbar.addWidget(btn_delete_image)
+        attachments_toolbar.addStretch()
+        
+        attachments_layout.addLayout(attachments_toolbar)
+        
+        # Images table
+        self.images_table = QTableWidget()
+        self.images_table.setColumnCount(4)
+        self.images_table.setHorizontalHeaderLabels([
+            'ID', 'Filename', 'Description', 'Uploaded At'
+        ])
+        self.images_table.setColumnHidden(0, True)
+        self.images_table.horizontalHeader().setStretchLastSection(True)
+        self.images_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        attachments_layout.addWidget(self.images_table)
+        
+        tabs.addTab(attachments_widget, "Attachments")
         
         main_layout.addWidget(tabs)
         
@@ -2862,6 +2905,80 @@ class StandardDialog(QDialog):
                 self.session.delete(criteria)
                 self.session.commit()
                 self.load_criteria()
+
+    def attach_image(self):
+        """Attach an image to the standard"""
+        if not self.standard:
+            QMessageBox.warning(self, "Save Required", "Please save the standard first.")
+            return
+            
+        dialog = ImageUploadDialog(self.session, self.current_user, self, self.standard.id, 'standard')
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.load_images()
+
+    def load_images(self):
+        """Load images attached to this standard"""
+        if not self.standard:
+            return
+            
+        self.images_table.setRowCount(0)
+        
+        images = self.session.query(ImageAttachment).filter(
+            ImageAttachment.entity_type == 'standard',
+            ImageAttachment.entity_id == self.standard.id
+        ).all()
+        
+        for img in images:
+            row = self.images_table.rowCount()
+            self.images_table.insertRow(row)
+            
+            self.images_table.setItem(row, 0, QTableWidgetItem(str(img.id)))
+            self.images_table.setItem(row, 1, QTableWidgetItem(img.filename))
+            self.images_table.setItem(row, 2, QTableWidgetItem(img.description or ""))
+            self.images_table.setItem(row, 3, QTableWidgetItem(img.uploaded_at.strftime('%Y-%m-%d %H:%M')))
+
+    def view_image(self):
+        """View the selected image"""
+        if self.images_table.currentRow() < 0:
+            QMessageBox.warning(self, "No Selection", "Please select an image to view")
+            return
+            
+        image_id = int(self.images_table.item(self.images_table.currentRow(), 0).text())
+        image_attachment = self.session.get(ImageAttachment, image_id)
+        
+        if image_attachment:
+            img_path = image_attachment.file_path
+            
+            if img_path and os.path.exists(img_path):
+                from pathlib import Path
+                import webbrowser
+                webbrowser.open(Path(img_path).as_uri())
+            else:
+                QMessageBox.warning(self, "Error", "Image file not found")
+
+    def delete_image(self):
+        """Delete the selected image"""
+        if self.images_table.currentRow() < 0:
+            QMessageBox.warning(self, "No Selection", "Please select an image to delete")
+            return
+            
+        image_id = int(self.images_table.item(self.images_table.currentRow(), 0).text())
+        image_attachment = self.session.get(ImageAttachment, image_id)
+        
+        if image_attachment:
+            reply = QMessageBox.question(
+                self, "Confirm Delete",
+                f"Are you sure you want to delete the image '{image_attachment.filename}'?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # Delete physical file
+                from image_handler import ImageHandler
+                handler = ImageHandler(self.session)
+                handler.delete_image(image_attachment.id)
+                
+                self.load_images()
     
     def load_sections(self):
         """Load sections for the standard"""
@@ -2971,10 +3088,11 @@ class StandardDialog(QDialog):
         
         self.is_active_check.setChecked(self.standard.is_active)
         
-        # Load sections, criteria, and meta
+        # Load sections, criteria, meta, and images
         self.load_sections()
         self.load_criteria()
         self.load_meta_data()
+        self.load_images()
     
     def save_standard(self):
         """Save the standard"""
@@ -3030,6 +3148,24 @@ class StandardDialog(QDialog):
                 self.standard = standard  # Store for sections/criteria
             
             self.session.commit()
+            
+            # Audit logging
+            action = 'update' if self.standard else 'insert'
+            try:
+                log_entry = AuditLog(
+                    table_name='standards',
+                    record_id=standard.id,
+                    action=action,
+                    user_id=self.current_user.id,
+                    username=self.current_user.full_name,
+                    new_values={'code': standard.code, 'name': standard.name, 'version': standard.version},
+                    timestamp=datetime.now()
+                )
+                self.session.add(log_entry)
+                self.session.commit()
+            except:
+                pass
+            
             self.accept()
             
         except Exception as e:
@@ -3608,6 +3744,24 @@ class CriteriaDialog(QDialog):
                 self.session.add(criteria)
             
             self.session.commit()
+            
+            # Audit logging
+            action = 'update' if self.criteria else 'insert'
+            try:
+                log_entry = AuditLog(
+                    table_name='criteria',
+                    record_id=criteria.id,
+                    action=action,
+                    user_id=self.current_user.id,
+                    username=self.current_user.full_name,
+                    new_values={'code': criteria.code, 'title': criteria.title, 'data_type': criteria.data_type},
+                    timestamp=datetime.now()
+                )
+                self.session.add(log_entry)
+                self.session.commit()
+            except:
+                pass
+            
             self.accept()
             
         except Exception as e:
@@ -3882,6 +4036,24 @@ class NonConformanceDialog(QDialog):
                 self.session.add(nc)
             
             self.session.commit()
+            
+            # Audit logging
+            action = 'update' if self.nc else 'insert'
+            try:
+                log_entry = AuditLog(
+                    table_name='non_conformances',
+                    record_id=nc.id,
+                    action=action,
+                    user_id=self.current_user.id,
+                    username=self.current_user.full_name,
+                    new_values={'nc_number': nc.nc_number, 'title': nc.title, 'status': nc.status, 'severity': nc.severity},
+                    timestamp=datetime.now()
+                )
+                self.session.add(log_entry)
+                self.session.commit()
+            except:
+                pass
+            
             self.accept()
             
         except Exception as e:
@@ -4153,6 +4325,24 @@ class UserDialog(QDialog):
                 self.session.add(user)
             
             self.session.commit()
+            
+            # Audit logging
+            action = 'update' if self.user else 'insert'
+            try:
+                log_entry = AuditLog(
+                    table_name='users',
+                    record_id=user.id,
+                    action=action,
+                    user_id=self.current_user.id,
+                    username=self.current_user.full_name,
+                    new_values={'username': user.username, 'full_name': user.full_name, 'email': user.email, 'is_active': user.is_active},
+                    timestamp=datetime.now()
+                )
+                self.session.add(log_entry)
+                self.session.commit()
+            except:
+                pass
+            
             self.accept()
             
         except Exception as e:
@@ -4371,7 +4561,7 @@ class CompanySettingsDialog(QDialog):
         
         # Logo Section
         logo_label = QLabel("<b>Company Logo</b>")
-        logo_label.setStyleSheet("font-size: 12pt; color: #366092; margin-top: 10px;")
+        logo_label.setStyleSheet("font-size: 12pt; color: #2f3542; margin-top: 10px;")
         form_layout.addRow(logo_label)
         
         logo_layout = QHBoxLayout()
@@ -4397,7 +4587,7 @@ class CompanySettingsDialog(QDialog):
         
         # Company Information
         company_label = QLabel("<b>Company Information</b>")
-        company_label.setStyleSheet("font-size: 12pt; color: #366092; margin-top: 15px;")
+        company_label.setStyleSheet("font-size: 12pt; color: #2f3542; margin-top: 15px;")
         form_layout.addRow(company_label)
         
         self.company_name_input = QLineEdit()
@@ -4414,7 +4604,7 @@ class CompanySettingsDialog(QDialog):
         
         # Contact Information
         contact_label = QLabel("<b>Contact Information</b>")
-        contact_label.setStyleSheet("font-size: 12pt; color: #366092; margin-top: 15px;")
+        contact_label.setStyleSheet("font-size: 12pt; color: #2f3542; margin-top: 15px;")
         form_layout.addRow(contact_label)
         
         self.address_input = QTextEdit()
@@ -4456,7 +4646,7 @@ class CompanySettingsDialog(QDialog):
         
         # Additional Information
         additional_label = QLabel("<b>Additional Information</b>")
-        additional_label.setStyleSheet("font-size: 12pt; color: #366092; margin-top: 15px;")
+        additional_label.setStyleSheet("font-size: 12pt; color: #2f3542; margin-top: 15px;")
         form_layout.addRow(additional_label)
         
         self.certification_input = QTextEdit()
@@ -4601,6 +4791,192 @@ class CompanySettingsDialog(QDialog):
             QMessageBox.critical(self, "Error", f"Failed to save settings:\n{str(e)}")
 
 
+class QuickAddReadingDialog(QDialog):
+    """Dialog for quickly adding multiple readings to a record at once"""
+    
+    def __init__(self, session, record, parent=None):
+        super().__init__(parent)
+        self.session = session
+        self.record = record
+        self.inputs = {}  # Store input widgets by field_id
+        
+        self.setWindowTitle(f"Quick Add Readings: {record.record_number}")
+        self.setMinimumWidth(750)
+        self.setMinimumHeight(500)
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+        
+        # Info header
+        header = QLabel(f"<b>Record:</b> {self.record.record_number} | <b>Title:</b> {self.record.title or 'Untitled'}")
+        header.setStyleSheet("padding: 10px; background-color: #f1f2f6; border-radius: 4px;")
+        layout.addWidget(header)
+        
+        instruction = QLabel("Enter values for one or more criteria below. Empty fields will be ignored.")
+        instruction.setStyleSheet("color: #57606f; font-style: italic; margin-bottom: 5px;")
+        layout.addWidget(instruction)
+        
+        # Readings Table
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Criteria", "Limits", "Reading Value", "Status"])
+        
+        # Horizontal header styling
+        header_view = self.table.horizontalHeader()
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(2, 160)
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(3, 100)
+        
+        self.load_fields()
+        layout.addWidget(self.table)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.save)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def load_fields(self):
+        """Load fields into the table from the template"""
+        if not self.record.template:
+            return
+            
+        fields = self.session.query(TemplateField).filter_by(
+            template_id=self.record.template_id
+        ).order_by(TemplateField.sort_order).all()
+        
+        self.table.setRowCount(len(fields))
+        
+        for row, field in enumerate(fields):
+            criteria = field.criteria
+            if not criteria: continue
+            
+            # 1. Criteria Name
+            name = f"{criteria.code} - {criteria.title}" if criteria.code else criteria.title
+            name_item = QTableWidgetItem(name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, 0, name_item)
+            
+            # 2. Limits
+            limits = []
+            if criteria.limit_min is not None: limits.append(f"Min: {criteria.limit_min}")
+            if criteria.limit_max is not None: limits.append(f"Max: {criteria.limit_max}")
+            if criteria.tolerance is not None: limits.append(f"±{criteria.tolerance}")
+            limit_text = " | ".join(limits) if limits else "No Limits"
+            limit_item = QTableWidgetItem(limit_text)
+            limit_item.setFlags(limit_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            limit_item.setForeground(Qt.GlobalColor.darkGray)
+            self.table.setItem(row, 1, limit_item)
+            
+            # 3. Value Input
+            input_widget = QLineEdit()
+            input_widget.setPlaceholderText("Enter value...")
+            input_widget.setFrame(False)
+            
+            # Connect validator to status label
+            status_label = QLabel("Pending")
+            status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            # Use closure to capture variables for lambda
+            input_widget.textChanged.connect(
+                lambda text, c=criteria, lbl=status_label: self.update_status(text, c, lbl)
+            )
+            
+            self.table.setCellWidget(row, 2, input_widget)
+            self.inputs[field.id] = input_widget
+            
+            # 4. Status
+            self.table.setCellWidget(row, 3, status_label)
+            
+    def update_status(self, text, criteria, label):
+        """Update individual status label based on input value"""
+        text = text.strip()
+        if not text:
+            label.setText("Pending")
+            label.setStyleSheet("")
+            return
+            
+        try:
+            val = float(text)
+            is_pass = True
+            if criteria.data_type == 'numeric':
+                if criteria.limit_min is not None:
+                    min_val = float(criteria.limit_min)
+                    if criteria.tolerance is not None: min_val -= float(criteria.tolerance)
+                    if val < min_val: is_pass = False
+                if is_pass and criteria.limit_max is not None:
+                    max_val = float(criteria.limit_max)
+                    if criteria.tolerance is not None: max_val += float(criteria.tolerance)
+                    if val > max_val: is_pass = False
+            
+            if is_pass:
+                label.setText("PASS")
+                label.setStyleSheet("color: green; font-weight: bold;")
+            else:
+                label.setText("FAIL")
+                label.setStyleSheet("color: red; font-weight: bold;")
+        except ValueError:
+            label.setText("Error")
+            label.setStyleSheet("color: orange;")
+
+    def save(self):
+        """Save all rows that have a value entered"""
+        added_count = 0
+        try:
+            for field_id, input_widget in self.inputs.items():
+                val_text = input_widget.text().strip()
+                if not val_text:
+                    continue
+                
+                val = float(val_text)
+                field = self.session.get(TemplateField, field_id)
+                criteria = field.criteria
+                
+                # Compliance calculation
+                is_pass = True
+                if criteria and criteria.data_type == 'numeric':
+                    if criteria.limit_min is not None:
+                        min_val = float(criteria.limit_min)
+                        if criteria.tolerance is not None: min_val -= float(criteria.tolerance)
+                        if val < min_val: is_pass = False
+                    if is_pass and criteria.limit_max is not None:
+                        max_val = float(criteria.limit_max)
+                        if criteria.tolerance is not None: max_val += float(criteria.tolerance)
+                        if val > max_val: is_pass = False
+                
+                # Create RecordItem
+                item = RecordItem(
+                    record_id=self.record.id,
+                    criteria_id=field.criteria_id,
+                    template_field_id=field.id,
+                    numeric_value=val,
+                    compliance=is_pass,
+                    measured_at=datetime.now()
+                )
+                self.session.add(item)
+                added_count += 1
+            
+            if added_count > 0:
+                self.session.commit()
+                self.accept()
+            else:
+                QMessageBox.warning(self, "No Data", "Please enter at least one reading value.")
+                
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Data", "Please ensure all entered values are valid numbers.")
+        except Exception as e:
+            self.session.rollback()
+            QMessageBox.critical(self, "Error", f"Failed to save readings:\n{str(e)}")
+
+
 class LoginDialog(QDialog):
     """Login dialog for user authentication"""
     
@@ -4743,13 +5119,19 @@ class AuditLogDialog(QDialog):
         filter_layout.addWidget(QLabel("Entity:"))
         self.entity_filter = QComboBox()
         self.entity_filter.addItem("All", None)
-        self.entity_filter.addItems(['Record', 'Standard', 'Template', 'User', 'NonConformance'])
+        self.entity_filter.addItem("Records", "records")
+        self.entity_filter.addItem("Templates", "templates")
+        self.entity_filter.addItem("Standards", "standards")
+        self.entity_filter.addItem("Criteria", "criteria")
+        self.entity_filter.addItem("Non-Conformances", "non_conformances")
+        self.entity_filter.addItem("Users", "users")
+        self.entity_filter.addItem("Documents", "documents")
         filter_layout.addWidget(self.entity_filter)
         
         filter_layout.addWidget(QLabel("Action:"))
         self.action_filter = QComboBox()
         self.action_filter.addItem("All", None)
-        self.action_filter.addItems(['create', 'update', 'delete'])
+        self.action_filter.addItems(['insert', 'update', 'delete'])
         filter_layout.addWidget(self.action_filter)
         
         filter_layout.addWidget(QLabel("User:"))
@@ -4794,9 +5176,9 @@ class AuditLogDialog(QDialog):
         query = self.session.query(AuditLog).order_by(AuditLog.timestamp.desc())
         
         # Apply filters
-        entity_type = self.entity_filter.currentText()
-        if entity_type != "All":
-            query = query.filter(AuditLog.table_name == entity_type.lower())
+        entity_type = self.entity_filter.currentData()
+        if entity_type:
+            query = query.filter(AuditLog.table_name == entity_type)
         
         action = self.action_filter.currentText()
         if action != "All":
@@ -5195,6 +5577,21 @@ class DocumentDialog(QDialog):
             if doc:
                 try:
                     import os
+                    # Audit logging before delete
+                    try:
+                        log_entry = AuditLog(
+                            table_name='documents',
+                            record_id=doc.id,
+                            action='delete',
+                            user_id=self.current_user.id,
+                            username=self.current_user.full_name,
+                            old_values={'document_number': doc.document_number, 'title': doc.title, 'version': doc.version},
+                            timestamp=datetime.now()
+                        )
+                        self.session.add(log_entry)
+                    except:
+                        pass
+                    
                     # Remove file from disk
                     if doc.file_path and os.path.exists(doc.file_path):
                         os.remove(doc.file_path)
@@ -5395,6 +5792,23 @@ class DocumentUploadDialog(QDialog):
             
             self.session.commit()
             
+            # Audit logging
+            audit_action = 'update' if self.document else 'insert'
+            try:
+                log_entry = AuditLog(
+                    table_name='documents',
+                    record_id=doc.id,
+                    action=audit_action,
+                    user_id=self.current_user.id,
+                    username=self.current_user.full_name,
+                    new_values={'document_number': doc.document_number, 'title': doc.title, 'version': doc.version, 'status': doc.status},
+                    timestamp=datetime.now()
+                )
+                self.session.add(log_entry)
+                self.session.commit()
+            except:
+                pass
+            
             action = "updated" if self.document else "uploaded"
             QMessageBox.information(self, "Success", f"Document {action} successfully")
             self.accept()
@@ -5443,13 +5857,19 @@ class ImageUploadDialog(QDialog):
         self.file_label = QLabel("No file selected")
         btn_browse = QPushButton("Browse...")
         btn_browse.clicked.connect(self.browse_file)
+        
+        btn_camera = QPushButton("Take Photo")
+        btn_camera.clicked.connect(self.take_photo)
+        btn_camera.setStyleSheet("background-color: #576574; color: white;")
+        
         file_layout.addWidget(self.file_label, 1)
         file_layout.addWidget(btn_browse)
-        form_layout.addRow("Image File *:", file_layout)
+        file_layout.addWidget(btn_camera)
+        form_layout.addRow("Image Source *:", file_layout)
         
         # Entity Type
         self.entity_type_combo = QComboBox()
-        self.entity_type_combo.addItems(["standalone", "record", "non_conformance", "document"])
+        self.entity_type_combo.addItems(["standalone", "record", "non_conformance", "document", "standard"])
         self.entity_type_combo.currentTextChanged.connect(self.on_entity_type_changed)
         form_layout.addRow("Attach To *:", self.entity_type_combo)
         
@@ -5495,6 +5915,27 @@ class ImageUploadDialog(QDialog):
             self.selected_file_path = file_path
             filename = os.path.basename(file_path)
             self.file_label.setText(filename)
+
+    def take_photo(self):
+        """Take a photo using the device camera"""
+        try:
+            # Try OpenCV first (more stable on Linux)
+            try:
+                from camera_opencv import OpenCVCameraDialog
+                dialog = OpenCVCameraDialog(self)
+            except (ImportError, Exception):
+                # Fall back to Qt Multimedia
+                from camera_dialog import CameraCaptureDialog
+                dialog = CameraCaptureDialog(self)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                if dialog.captured_file:
+                    import os
+                    self.selected_file_path = dialog.captured_file
+                    filename = os.path.basename(self.selected_file_path)
+                    self.file_label.setText(f"Captured: {filename}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open camera:\n{str(e)}")
     
     def on_entity_type_changed(self, entity_type):
         """Handle entity type change"""
@@ -5528,14 +5969,29 @@ class ImageUploadDialog(QDialog):
                 for doc in docs:
                     display = f"{doc.document_number or 'N/A'} - {doc.title or 'No Title'}"
                     self.entity_id_combo.addItem(display, doc.id)
+            
+            elif entity_type == "standard":
+                stds = self.session.query(Standard).order_by(Standard.code.asc()).all()
+                for std in stds:
+                    display = f"{std.code} - {std.name}"
+                    self.entity_id_combo.addItem(display, std.id)
     
     def save_image(self):
         """Save image attachment"""
+        import os
+        import shutil
+        from pathlib import Path
+        from PIL import Image as PILImage
+        
         # Validation
         if not self.selected_file_path:
             QMessageBox.warning(self, "Validation Error", "Please select an image file")
             return
         
+        if not os.path.exists(self.selected_file_path):
+            QMessageBox.critical(self, "Error", f"Source file does not exist:\n{self.selected_file_path}")
+            return
+            
         entity_type = self.entity_type_combo.currentText()
         
         if entity_type != "standalone" and self.entity_id_combo.currentIndex() < 0:
@@ -5543,22 +5999,29 @@ class ImageUploadDialog(QDialog):
             return
         
         try:
-            import os
-            import shutil
-            from pathlib import Path
-            from PIL import Image as PILImage
-            
             # Create images directory
             images_dir = Path.home() / '.quality_system' / 'images'
-            images_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                images_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as de:
+                raise Exception(f"Failed to create directory {images_dir}: {str(de)}")
             
             # Copy file with unique name
-            filename = os.path.basename(self.selected_file_path)
+            source_file = self.selected_file_path
+            filename = os.path.basename(source_file)
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            unique_filename = f"{timestamp}_{filename}"
+            
+            # Sanitize filename
+            clean_filename = "".join([c for c in filename if c.isalnum() or c in ('.','_','-')]).strip()
+            if not clean_filename: clean_filename = "captured_image.jpg"
+            
+            unique_filename = f"{timestamp}_{clean_filename}"
             dest_path = images_dir / unique_filename
             
-            shutil.copy2(self.selected_file_path, dest_path)
+            try:
+                shutil.copy2(source_file, dest_path)
+            except Exception as ce:
+                raise Exception(f"Failed to copy file from {source_file} to {dest_path}: {str(ce)}")
             
             # Get image dimensions and MIME type
             file_size = os.path.getsize(dest_path)
@@ -5569,21 +6032,23 @@ class ImageUploadDialog(QDialog):
             try:
                 with PILImage.open(dest_path) as pil_img:
                     width, height = pil_img.size
-                    mime_type = f"image/{pil_img.format.lower()}" if pil_img.format else None
-            except:
-                pass
+                    fmt = pil_img.format.lower() if pil_img.format else 'jpeg'
+                    mime_type = f"image/{fmt}"
+            except Exception as pe:
+                print(f"Pillow could not read image metadata: {pe}")
+                # Fallback to defaults
+                mime_type = "image/jpeg"
             
             # Create image attachment record
             img = ImageAttachment()
             img.entity_type = entity_type
             
             if entity_type == "standalone":
-                # Use a dummy ID for standalone images (0)
                 img.entity_id = 0
             else:
                 img.entity_id = self.entity_id_combo.currentData()
             
-            img.filename = filename
+            img.filename = clean_filename
             img.file_path = str(dest_path)
             img.file_size = file_size
             img.mime_type = mime_type
@@ -5601,9 +6066,10 @@ class ImageUploadDialog(QDialog):
             
         except Exception as e:
             self.session.rollback()
-            QMessageBox.critical(self, "Error", f"Failed to upload image:\n{str(e)}")
             import traceback
-            traceback.print_exc()
+            error_details = traceback.format_exc()
+            print(error_details)
+            QMessageBox.critical(self, "Upload Error", f"Failed to upload image:\n{str(e)}\n\nDetails have been printed to terminal.")
 
 
 class ImageAttachmentDialog(QDialog):
@@ -5704,17 +6170,10 @@ class ImageAttachmentDialog(QDialog):
         if img and img.file_path:
             try:
                 import os
-                import subprocess
-                import platform
-                
                 if os.path.exists(img.file_path):
-                    # Open file with default application
-                    if platform.system() == 'Windows':
-                        os.startfile(img.file_path)
-                    elif platform.system() == 'Darwin':  # macOS
-                        subprocess.call(['open', img.file_path])
-                    else:  # Linux
-                        subprocess.call(['xdg-open', img.file_path])
+                    from pathlib import Path
+                    import webbrowser
+                    webbrowser.open(Path(img.file_path).as_uri())
                 else:
                     QMessageBox.warning(self, "File Not Found", "The image file no longer exists")
             except Exception as e:
@@ -6200,19 +6659,20 @@ class WorkflowStepsDialog(QDialog):
                     self.steps_table.setItem(row_idx, 1, QTableWidgetItem(step.get('name', '')))
                     self.steps_table.setItem(row_idx, 2, QTableWidgetItem(step.get('action_type', '')))
                     self.steps_table.setItem(row_idx, 3, QTableWidgetItem(step.get('assigned_role', '')))
-                    self.steps_table.setItem(row_idx, 4, QTableWidgetItem(step.get('description', '')))
+                    
+                    # Store complex data in UserRole for later retrieval during edits
+                    desc_item = QTableWidgetItem(step.get('description', ''))
+                    desc_item.setData(Qt.ItemDataRole.UserRole, step)
+                    self.steps_table.setItem(row_idx, 4, desc_item)
     
     def add_step(self):
         """Add new step"""
-        dialog = WorkflowStepFormDialog(self.session, None, self)
+        all_steps_data = self._get_current_table_data()
+        dialog = WorkflowStepFormDialog(self.session, None, self, all_steps_data)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             row = self.steps_table.rowCount()
             self.steps_table.insertRow(row)
-            self.steps_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-            self.steps_table.setItem(row, 1, QTableWidgetItem(dialog.name_edit.text()))
-            self.steps_table.setItem(row, 2, QTableWidgetItem(dialog.action_combo.currentText()))
-            self.steps_table.setItem(row, 3, QTableWidgetItem(dialog.role_edit.text()))
-            self.steps_table.setItem(row, 4, QTableWidgetItem(dialog.description_edit.toPlainText()))
+            self._update_row_from_dialog(row, dialog)
             self.renumber_steps()
     
     def edit_step(self):
@@ -6222,19 +6682,44 @@ class WorkflowStepsDialog(QDialog):
             return
         
         row = self.steps_table.currentRow()
-        step_data = {
-            'name': self.steps_table.item(row, 1).text() if self.steps_table.item(row, 1) else '',
-            'action_type': self.steps_table.item(row, 2).text() if self.steps_table.item(row, 2) else '',
-            'assigned_role': self.steps_table.item(row, 3).text() if self.steps_table.item(row, 3) else '',
-            'description': self.steps_table.item(row, 4).text() if self.steps_table.item(row, 4) else ''
+        # Retrieve full step data from UserRole
+        step_data = self.steps_table.item(row, 4).data(Qt.ItemDataRole.UserRole) or {}
+        
+        all_steps_data = self._get_current_table_data()
+        dialog = WorkflowStepFormDialog(self.session, step_data, self, all_steps_data)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._update_row_from_dialog(row, dialog)
+
+    def _get_current_table_data(self):
+        """Helper to get step names for branching combo"""
+        steps = []
+        for r in range(self.steps_table.rowCount()):
+            steps.append({'name': self.steps_table.item(r, 1).text() if self.steps_table.item(r, 1) else ""})
+        return steps
+
+    def _update_row_from_dialog(self, row, dialog):
+        """Update table row and hidden data from dialog results"""
+        self.steps_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+        self.steps_table.setItem(row, 1, QTableWidgetItem(dialog.name_edit.text()))
+        self.steps_table.setItem(row, 2, QTableWidgetItem(dialog.action_combo.currentText()))
+        self.steps_table.setItem(row, 3, QTableWidgetItem(dialog.role_edit.text()))
+        
+        # Build full step dict
+        step_dict = {
+            'order': row + 1,
+            'name': dialog.name_edit.text(),
+            'action_type': dialog.action_combo.currentText(),
+            'assigned_role': dialog.role_edit.text(),
+            'description': dialog.description_edit.toPlainText(),
+            'next_step_success': dialog.success_step.currentData(),
+            'success_action': dialog.success_action.text(),
+            'next_step_fail': dialog.fail_step.currentData(),
+            'fail_action': dialog.fail_action.text()
         }
         
-        dialog = WorkflowStepFormDialog(self.session, step_data, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.steps_table.setItem(row, 1, QTableWidgetItem(dialog.name_edit.text()))
-            self.steps_table.setItem(row, 2, QTableWidgetItem(dialog.action_combo.currentText()))
-            self.steps_table.setItem(row, 3, QTableWidgetItem(dialog.role_edit.text()))
-            self.steps_table.setItem(row, 4, QTableWidgetItem(dialog.description_edit.toPlainText()))
+        desc_item = QTableWidgetItem(dialog.description_edit.toPlainText())
+        desc_item.setData(Qt.ItemDataRole.UserRole, step_dict)
+        self.steps_table.setItem(row, 4, desc_item)
     
     def delete_step(self):
         """Delete selected step"""
@@ -6295,13 +6780,21 @@ class WorkflowStepsDialog(QDialog):
         steps = []
         
         for row in range(self.steps_table.rowCount()):
-            step = {
-                'order': row + 1,
-                'name': self.steps_table.item(row, 1).text() if self.steps_table.item(row, 1) else '',
-                'action_type': self.steps_table.item(row, 2).text() if self.steps_table.item(row, 2) else '',
-                'assigned_role': self.steps_table.item(row, 3).text() if self.steps_table.item(row, 3) else '',
-                'description': self.steps_table.item(row, 4).text() if self.steps_table.item(row, 4) else ''
-            }
+            # Pull full step dictionary from UserRole
+            step = self.steps_table.item(row, 4).data(Qt.ItemDataRole.UserRole)
+            if not step:
+                # Fallback for safety
+                step = {
+                    'order': row + 1,
+                    'name': self.steps_table.item(row, 1).text() if self.steps_table.item(row, 1) else '',
+                    'action_type': self.steps_table.item(row, 2).text() if self.steps_table.item(row, 2) else '',
+                    'assigned_role': self.steps_table.item(row, 3).text() if self.steps_table.item(row, 3) else '',
+                    'description': self.steps_table.item(row, 4).text() if self.steps_table.item(row, 4) else ''
+                }
+            else:
+                # Ensure order is correct after moves/deletes
+                step['order'] = row + 1
+                
             steps.append(step)
         
         return json.dumps(steps)
@@ -6310,13 +6803,14 @@ class WorkflowStepsDialog(QDialog):
 class WorkflowStepFormDialog(QDialog):
     """Dialog for creating/editing a single workflow step"""
     
-    def __init__(self, session, step_data=None, parent=None):
+    def __init__(self, session, step_data=None, parent=None, all_steps=None):
         super().__init__(parent)
         self.session = session
         self.step_data = step_data
+        self.all_steps = all_steps or [] # List of {'name': '...'}
         
         self.setWindowTitle("New Step" if step_data is None else "Edit Step")
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(550)
         
         self.setup_ui()
         if step_data:
@@ -6337,15 +6831,8 @@ class WorkflowStepFormDialog(QDialog):
         # Action Type
         self.action_combo = QComboBox()
         self.action_combo.addItems([
-            "Review",
-            "Approve",
-            "Reject",
-            "Submit",
-            "Notify",
-            "Validate",
-            "Execute",
-            "Complete",
-            "Custom"
+            "Review", "Approve", "Reject", "Submit", "Notify", 
+            "Validate", "Execute", "Complete", "Decision", "Custom"
         ])
         form_layout.addRow("Action Type *:", self.action_combo)
         
@@ -6356,11 +6843,52 @@ class WorkflowStepFormDialog(QDialog):
         
         # Description
         self.description_edit = QTextEdit()
-        self.description_edit.setMaximumHeight(100)
+        self.description_edit.setMaximumHeight(80)
         self.description_edit.setPlaceholderText("Describe what happens in this step")
         form_layout.addRow("Description:", self.description_edit)
         
         layout.addLayout(form_layout)
+
+        # Branching Logic GroupBox
+        branch_group = QGroupBox("Workflow Branching & Actions")
+        branch_layout = QVBoxLayout()
+        branch_group.setLayout(branch_layout)
+        
+        # Success Branch
+        success_layout = QFormLayout()
+        self.success_step = QComboBox()
+        self.success_step.addItem("Next Sequential Step", "next")
+        self.success_step.addItem("End Workflow (Success)", "end")
+        for i, step in enumerate(self.all_steps):
+            self.success_step.addItem(f"Step {i+1}: {step.get('name')}", i + 1)
+            
+        self.success_action = QLineEdit()
+        self.success_action.setPlaceholderText("Action to trigger on success (e.g. status='approved')")
+        
+        success_layout.addRow("If Success -> Go To:", self.success_step)
+        success_layout.addRow("Success Action:", self.success_action)
+        
+        # Failure Branch
+        fail_layout = QFormLayout()
+        self.fail_step = QComboBox()
+        self.fail_step.addItem("End Workflow (Fail)", "end")
+        self.fail_step.addItem("Restart Workflow", "restart")
+        for i, step in enumerate(self.all_steps):
+            self.fail_step.addItem(f"Step {i+1}: {step.get('name')}", i + 1)
+            
+        self.fail_action = QLineEdit()
+        self.fail_action.setPlaceholderText("Action to trigger on failure (e.g. open_nc=true)")
+        
+        fail_layout.addRow("If Failed -> Go To:", self.fail_step)
+        fail_layout.addRow("Failure Action:", self.fail_action)
+        
+        branch_layout.addWidget(QLabel("<b>On Success (Pass/Green):</b>"))
+        branch_layout.addLayout(success_layout)
+        branch_layout.addWidget(QLabel(""))
+        branch_layout.addWidget(QLabel("<b>On Failure (Fail/Red):</b>"))
+        branch_layout.addLayout(fail_layout)
+        
+        layout.addWidget(branch_group)
         
         # Buttons
         button_box = QDialogButtonBox(
@@ -6380,6 +6908,17 @@ class WorkflowStepFormDialog(QDialog):
         
         self.role_edit.setText(self.step_data.get('assigned_role', ''))
         self.description_edit.setPlainText(self.step_data.get('description', ''))
+
+        # Load branching
+        s_step = self.step_data.get('next_step_success', 'next')
+        idx = self.success_step.findData(s_step)
+        if idx >= 0: self.success_step.setCurrentIndex(idx)
+        self.success_action.setText(self.step_data.get('success_action', ''))
+
+        f_step = self.step_data.get('next_step_fail', 'end')
+        idx = self.fail_step.findData(f_step)
+        if idx >= 0: self.fail_step.setCurrentIndex(idx)
+        self.fail_action.setText(self.step_data.get('fail_action', ''))
     
     def validate_and_accept(self):
         """Validate form"""
@@ -6597,6 +7136,7 @@ class MainWindow(QMainWindow):
             sys.exit(0)
         
         # Setup UI
+        self.apply_theme()
         self.setup_ui()
         self.setup_menu()
         self.setup_toolbar()
@@ -6609,6 +7149,157 @@ class MainWindow(QMainWindow):
         if UPDATER_AVAILABLE:
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(2000, self.check_for_updates)  # Check after 2 seconds
+    
+    def apply_theme(self):
+        """Apply a professional light theme to the application"""
+        qss = """
+        QMainWindow, QDialog {
+            background-color: #f5f7fa;
+        }
+        
+        /* General Widget Styling */
+        QWidget {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 10pt;
+            color: #2d3436;
+        }
+        
+        /* Tab Widget Styling */
+        QTabWidget::pane {
+            border: 1px solid #dcdde1;
+            background: white;
+            border-radius: 5px;
+        }
+        
+        QTabBar::tab {
+            background: #f1f2f6;
+            border: 1px solid #dcdde1;
+            padding: 10px 20px;
+            border-top-left-radius: 5px;
+            border-top-right-radius: 5px;
+            margin-right: 2px;
+            color: #57606f;
+        }
+        
+        QTabBar::tab:selected {
+            background: white;
+            border-bottom-color: white;
+            font-weight: bold;
+            color: #2f3542;
+        }
+        
+        QTabBar::tab:hover {
+            background: #dfe4ea;
+        }
+        
+        /* Table Styling */
+        QTableWidget, QTreeView, QListView {
+            background-color: white;
+            alternate-background-color: #f8f9fa;
+            border: 1px solid #dcdde1;
+            gridline-color: #f1f2f6;
+            selection-background-color: #70a1ff;
+            selection-color: white;
+            border-radius: 4px;
+        }
+        
+        QHeaderView::section {
+            background-color: #2f3542;
+            color: white;
+            padding: 8px;
+            border: none;
+            font-weight: bold;
+            border-right: 1px solid #57606f;
+        }
+        
+        /* Buttons */
+        QPushButton {
+            background-color: #1e90ff;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        QPushButton:hover {
+            background-color: #3742fa;
+        }
+        
+        QPushButton:pressed {
+            background-color: #2f3542;
+        }
+        
+        QPushButton:disabled {
+            background-color: #ced6e0;
+            color: #747d8c;
+        }
+        
+        /* Toolbar buttons often need to be smaller or have a different style */
+        QToolBar QPushButton {
+            padding: 4px 8px;
+            font-size: 9pt;
+        }
+        
+        /* Form Controls */
+        QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit {
+            background-color: white;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 6px;
+            color: #2d3436;
+        }
+        
+        QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus {
+            border: 2px solid #70a1ff;
+        }
+        
+        /* Group Box */
+        QGroupBox {
+            font-weight: bold;
+            border: 1px solid #dcdde1;
+            border-radius: 8px;
+            margin-top: 1.2em;
+            padding-top: 10px;
+            background-color: #ffffff;
+        }
+        
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 5px 0 5px;
+            color: #2f3542;
+        }
+        
+        /* Dashboard Metric Value */
+        #metric_value {
+            color: #1e90ff;
+            font-size: 24pt;
+        }
+        
+        /* Status Bar */
+        QStatusBar {
+            background-color: #f1f2f6;
+            color: #57606f;
+        }
+        
+        /* Scroll Bar */
+        QScrollBar:vertical {
+            border: none;
+            background: #f1f2f6;
+            width: 12px;
+            margin: 0px;
+        }
+        QScrollBar::handle:vertical {
+            background: #ced6e0;
+            min-height: 25px;
+            border-radius: 6px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background: #a4b0be;
+        }
+        """
+        self.setStyleSheet(qss)
     
     def check_for_updates(self):
         """Check for application updates"""
@@ -6879,6 +7570,8 @@ class MainWindow(QMainWindow):
             'Record Number', 'Title', 'Status', 'Date', 'Compliance'
         ])
         self.recent_records_table.horizontalHeader().setStretchLastSection(True)
+        self.recent_records_table.setAlternatingRowColors(True)
+        self.recent_records_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.recent_records_table)
     
     def create_metric_card(self, label: str, value: str) -> QGroupBox:
@@ -6907,6 +7600,11 @@ class MainWindow(QMainWindow):
         btn_new_record = QPushButton("New Record")
         btn_new_record.clicked.connect(self.new_record_dialog)
         btn_new_record.setEnabled(self.has_permission('can_create_records'))
+        
+        btn_quick_add = QPushButton("Quick Add Reading")
+        btn_quick_add.clicked.connect(self.quick_add_reading)
+        btn_quick_add.setStyleSheet("background-color: #2ed573; color: white;")
+        btn_quick_add.setToolTip("Quickly add a reading to the selected record without opening it")
         
         btn_edit_record = QPushButton("Edit")
         btn_edit_record.clicked.connect(self.edit_record_dialog)
@@ -6938,6 +7636,7 @@ class MainWindow(QMainWindow):
         btn_refresh.clicked.connect(self.load_records)
         
         toolbar_layout.addWidget(btn_new_record)
+        toolbar_layout.addWidget(btn_quick_add)
         toolbar_layout.addWidget(btn_edit_record)
         toolbar_layout.addWidget(btn_delete_record)
         toolbar_layout.addWidget(btn_export_excel)
@@ -6960,6 +7659,7 @@ class MainWindow(QMainWindow):
         self.records_table.setColumnHidden(0, True)  # Hide ID column
         self.records_table.horizontalHeader().setStretchLastSection(True)
         self.records_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.records_table.setAlternatingRowColors(True)
         
         layout.addWidget(self.records_table)
     
@@ -7003,6 +7703,7 @@ class MainWindow(QMainWindow):
         self.templates_table.setColumnHidden(0, True)
         self.templates_table.horizontalHeader().setStretchLastSection(True)
         self.templates_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.templates_table.setAlternatingRowColors(True)
         
         layout.addWidget(self.templates_table)
     
@@ -7051,6 +7752,7 @@ class MainWindow(QMainWindow):
         self.standards_table.setColumnHidden(0, True)
         self.standards_table.horizontalHeader().setStretchLastSection(True)
         self.standards_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.standards_table.setAlternatingRowColors(True)
         
         layout.addWidget(self.standards_table)
     
@@ -7095,6 +7797,7 @@ class MainWindow(QMainWindow):
         self.nc_table.setColumnHidden(0, True)
         self.nc_table.horizontalHeader().setStretchLastSection(True)
         self.nc_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.nc_table.setAlternatingRowColors(True)
         
         layout.addWidget(self.nc_table)
     
@@ -7477,6 +8180,29 @@ class MainWindow(QMainWindow):
             self.load_records()
             self.statusbar.showMessage("Record created successfully", 3000)
     
+    def quick_add_reading(self):
+        """Open dialog to quickly add a reading to selected record"""
+        selected_rows = self.records_table.selectedItems()
+        if not selected_rows:
+            QMessageBox.warning(self, "No Selection", "Please select a record to add a reading to")
+            return
+            
+        try:
+            record_id = int(self.records_table.item(self.records_table.currentRow(), 0).text())
+            record = self.session.get(Record, record_id)
+            
+            if record:
+                if not record.template:
+                    QMessageBox.warning(self, "No Template", "This record has no template assigned. Cannot add readings quickly.")
+                    return
+                    
+                dialog = QuickAddReadingDialog(self.session, record, parent=self)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    self.load_records()
+                    self.statusbar.showMessage("Reading added successfully", 3000)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to add reading:\n{str(e)}")
+    
     def edit_record_dialog(self):
         """Open dialog to edit selected record"""
         selected_rows = self.records_table.selectedItems()
@@ -7518,6 +8244,21 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                # Audit logging before delete
+                try:
+                    log_entry = AuditLog(
+                        table_name='records',
+                        record_id=record.id,
+                        action='delete',
+                        user_id=self.current_user.id,
+                        username=self.current_user.full_name,
+                        old_values={'record_number': record.record_number, 'title': record.title, 'status': record.status},
+                        timestamp=datetime.now()
+                    )
+                    self.session.add(log_entry)
+                except:
+                    pass
+                
                 self.session.delete(record)
                 self.session.commit()
                 self.load_records()
@@ -7574,6 +8315,21 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                # Audit logging before delete
+                try:
+                    log_entry = AuditLog(
+                        table_name='templates',
+                        record_id=template.id,
+                        action='delete',
+                        user_id=self.current_user.id,
+                        username=self.current_user.full_name,
+                        old_values={'code': template.code, 'name': template.name, 'version': template.version},
+                        timestamp=datetime.now()
+                    )
+                    self.session.add(log_entry)
+                except:
+                    pass
+                
                 self.session.delete(template)
                 self.session.commit()
                 self.load_templates()
@@ -7657,6 +8413,21 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                # Audit logging before delete
+                try:
+                    log_entry = AuditLog(
+                        table_name='standards',
+                        record_id=standard.id,
+                        action='delete',
+                        user_id=self.current_user.id,
+                        username=self.current_user.full_name,
+                        old_values={'code': standard.code, 'name': standard.name, 'version': standard.version},
+                        timestamp=datetime.now()
+                    )
+                    self.session.add(log_entry)
+                except:
+                    pass
+                
                 self.session.delete(standard)
                 self.session.commit()
                 self.load_standards()
@@ -7713,6 +8484,21 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                # Audit logging before delete
+                try:
+                    log_entry = AuditLog(
+                        table_name='non_conformances',
+                        record_id=nc.id,
+                        action='delete',
+                        user_id=self.current_user.id,
+                        username=self.current_user.full_name,
+                        old_values={'nc_number': nc.nc_number, 'title': nc.title, 'status': nc.status, 'severity': nc.severity},
+                        timestamp=datetime.now()
+                    )
+                    self.session.add(log_entry)
+                except:
+                    pass
+                
                 self.session.delete(nc)
                 self.session.commit()
                 self.load_ncs()
@@ -7786,6 +8572,21 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                # Audit logging before delete
+                try:
+                    log_entry = AuditLog(
+                        table_name='users',
+                        record_id=user.id,
+                        action='delete',
+                        user_id=self.current_user.id,
+                        username=self.current_user.full_name,
+                        old_values={'username': user.username, 'full_name': user.full_name, 'email': user.email},
+                        timestamp=datetime.now()
+                    )
+                    self.session.add(log_entry)
+                except:
+                    pass
+                
                 self.session.delete(user)
                 self.session.commit()
                 self.load_users()

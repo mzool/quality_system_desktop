@@ -38,8 +38,18 @@ class Updater:
                 data = response.json()
                 
                 latest_version = data.get('version', '0.0.0')
-                download_url = data.get('download_url', '')
-                release_notes = data.get('notes', '')
+                
+                # Get platform-specific download URL
+                if self.system == 'Windows':
+                    platform_data = data.get('windows', {})
+                elif self.system == 'Linux':
+                    platform_data = data.get('linux', {})
+                else:  # Darwin (macOS)
+                    platform_data = data.get('macos', {})
+                
+                download_url = platform_data.get('url', data.get('download_url', ''))
+                release_notes_url = data.get('release_notes_url', '')
+                size_mb = platform_data.get('size_mb', 0)
                 
                 # Compare versions
                 if self._is_newer_version(latest_version, self.current_version):
@@ -47,7 +57,8 @@ class Updater:
                         'available': True,
                         'version': latest_version,
                         'url': download_url,
-                        'notes': release_notes
+                        'notes': f'New version available: {latest_version}\nSize: ~{size_mb}MB\n\nRelease notes: {release_notes_url}',
+                        'size_mb': size_mb
                     }
                 else:
                     return {

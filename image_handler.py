@@ -36,9 +36,10 @@ class ImageHandler:
         self.records_dir = self.storage_dir / 'records'
         self.items_dir = self.storage_dir / 'items'
         self.nc_dir = self.storage_dir / 'non_conformances'
+        self.standards_dir = self.storage_dir / 'standards'
         self.thumbnails_dir = self.storage_dir / 'thumbnails'
         
-        for directory in [self.records_dir, self.items_dir, self.nc_dir, self.thumbnails_dir]:
+        for directory in [self.records_dir, self.items_dir, self.nc_dir, self.standards_dir, self.thumbnails_dir]:
             directory.mkdir(exist_ok=True)
     
     def save_image(self, image_path: str, entity_type: str, entity_id: int,
@@ -91,6 +92,8 @@ class ImageHandler:
             target_dir = self.items_dir
         elif entity_type == 'non_conformance':
             target_dir = self.nc_dir
+        elif entity_type == 'standard':
+            target_dir = self.standards_dir
         else:
             target_dir = self.storage_dir
         
@@ -162,6 +165,21 @@ class ImageHandler:
             ImageAttachment object or None
         """
         return self.session.query(ImageAttachment).get(image_id)
+
+    def get_image_path(self, image_id: int) -> Optional[str]:
+        """
+        Get absolute path to an image file
+        
+        Args:
+            image_id: ImageAttachment ID
+            
+        Returns:
+            Path string or None
+        """
+        image = self.get_image(image_id)
+        if image and image.file_path:
+            return image.file_path
+        return None
     
     def get_images_for_entity(self, entity_type: str, entity_id: int) -> list:
         """

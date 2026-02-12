@@ -2,7 +2,7 @@
 Version information for Quality Management System
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __build__ = "20260210"
 __app_name__ = "Quality Management System"
 __author__ = "Mohammad Basem"
@@ -18,8 +18,8 @@ __author__ = "Mohammad Basem"
 # Option 2: GitHub Releases
 #   Use: https://github.com/YOUR_USERNAME/YOUR_REPO/releases/latest/download/update_info.json
 #
-__update_url__ = "https://your-server.com/api/version"  # Change to your update_info.json URL
-__download_url__ = "https://your-server.com/downloads"  # Base URL for downloads (optional)
+__update_url__ = "https://raw.githubusercontent.com/mzool/quality_system_desktop/main/update_info.json"
+__download_url__ = "https://github.com/mzool/quality_system_desktop/releases/latest/download"
 
 def get_version():
     """Get current version string"""

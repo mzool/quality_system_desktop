@@ -82,7 +82,7 @@ class PDFGenerator:
             name='CustomSubtitle',
             parent=self.styles['Heading2'],
             fontSize=14,
-            textColor=colors.HexColor('#366092'),
+            textColor=colors.HexColor('#2f3542'),
             spaceAfter=12,
             fontName='Helvetica-Bold'
         ))
@@ -92,7 +92,7 @@ class PDFGenerator:
             name='SectionHeader',
             parent=self.styles['Heading3'],
             fontSize=12,
-            textColor=colors.HexColor('#366092'),
+            textColor=colors.HexColor('#2f3542'),
             spaceAfter=6,
             spaceBefore=12,
             fontName='Helvetica-Bold',
@@ -184,13 +184,13 @@ class PDFGenerator:
             
             # Draw "Quality Management System" below company name
             canvas_obj.setFont('Helvetica-Bold', 10)
-            canvas_obj.setFillColor(colors.HexColor('#366092'))
+            canvas_obj.setFillColor(colors.HexColor('#2f3542'))
             canvas_obj.drawString(x_position, y_position - 0.15*inch, 
                                  "Quality Management System")
         else:
             # No company settings - use default header
             canvas_obj.setFont('Helvetica-Bold', 10)
-            canvas_obj.setFillColor(colors.HexColor('#366092'))
+            canvas_obj.setFillColor(colors.HexColor('#2f3542'))
             canvas_obj.drawString(x_position, y_position, 
                                  "Quality Management System")
         
@@ -412,7 +412,7 @@ class PDFGenerator:
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('FONTSIZE', (0, 1), (-1, -1), 9),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2f3542')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                 ('ALIGN', (4, 0), (4, -1), 'CENTER'),
@@ -558,6 +558,47 @@ class PDFGenerator:
                 print(f"Error querying/adding images to PDF: {e}")
                 import traceback
                 traceback.print_exc()
+
+        # ====================================================================
+        # STANDARD ATTACHMENTS (if applicable)
+        # ====================================================================
+        if record.standard and self.session:
+            try:
+                std_images = self.session.query(ImageAttachment).filter(
+                    ImageAttachment.entity_type == 'standard',
+                    ImageAttachment.entity_id == record.standard.id
+                ).all()
+                
+                if std_images:
+                    elements.append(PageBreak())
+                    elements.append(Paragraph(f"Standard References: {record.standard.name}", self.styles['CustomSubtitle']))
+                    elements.append(Spacer(1, 0.2*inch))
+                    
+                    for s_img in std_images:
+                        s_img_path = s_img.file_path
+                        if s_img_path and os.path.exists(s_img_path):
+                            elements.append(Paragraph(f"<b>Standard Reference:</b> {s_img.description or s_img.filename}", self.styles['Normal']))
+                            elements.append(Spacer(1, 0.1*inch))
+                            
+                            try:
+                                from reportlab.lib.utils import ImageReader
+                                r_img = ImageReader(s_img_path)
+                                w, h = r_img.getSize()
+                                aspect = h / float(w)
+                                
+                                img_w = 5.5 * inch
+                                img_h = img_w * aspect
+                                
+                                if img_h > 4 * inch:
+                                    img_h = 4 * inch
+                                    img_w = img_h / aspect
+                                    
+                                elements.append(RLImage(s_img_path, width=img_w, height=img_h))
+                                elements.append(Spacer(1, 0.4*inch))
+                            except Exception as e:
+                                print(f"Error rendering standard image: {e}")
+            except Exception as e:
+                print(f"Error adding standard images to record PDF: {e}")
         
         # ====================================================================
         # BUILD PDF
@@ -669,11 +710,14 @@ class PDFGenerator:
                 template_id=record.template_id
             ).order_by(Record.created_at.desc()).limit(100).all()  # Limit to last 100 records
             
+            # Reverse to get chronological order for charts
+            all_records.reverse()
+            
             print(f"Found {len(all_records)} records for template {record.template_id}")
             print(f"Template has {len(template_fields)} fields")
             
+            total_charts_generated = 0
             if all_records and template_fields:
-                total_charts_generated = 0
                 for field in template_fields:
                     if not field.criteria:
                         continue
@@ -697,7 +741,6 @@ class PDFGenerator:
                                 values.append(float(item.numeric_value))
                                 dates.append(rec.completed_at or rec.created_at)
                                 record_numbers.append(rec.record_number)
-                                break  # Only one value per record per criteria
                     
                     print(f"  Found {len(values)} values for {criteria.code}")
                     
@@ -749,7 +792,7 @@ class PDFGenerator:
                     stats_table.setStyle(TableStyle([
                         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                         ('FONTSIZE', (0, 0), (-1, -1), 9),
-                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2f3542')),
                         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                         ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
                         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
@@ -793,67 +836,82 @@ class PDFGenerator:
                     
                     elements.append(PageBreak())
                 
+                # After the loop
                 if total_charts_generated == 0:
                     print("WARNING: No charts were generated!")
                     elements.append(Paragraph("<i>No statistical charts could be generated. "
                                             "This may be because there are fewer than 2 numeric values "
                                             "for each criterion, or no numeric criteria are defined.</i>",
                                             self.styles['Normal']))
-                else:
-                    print(f"Total charts generated: {total_charts_generated}")
+            else:
+                elements.append(Paragraph("<i>No data found for statistical analysis.</i>",
+                                        self.styles['Normal']))
+        else:
+            elements.append(Paragraph("<i>Record has no template ID or session is missing.</i>",
+                                    self.styles['Normal']))
         
         # ====================================================================
-        # IMAGES SECTION
+        # IMAGES SECTION (Record & Standard Attachments)
         # ====================================================================
-        
-        if record.attachments and include_images:
+        if include_images and self.session:
             try:
-                import json
-                attachments = json.loads(record.attachments) if isinstance(record.attachments, str) else record.attachments
+                # 1. Check ImageAttachment table for record-linked images
+                image_attachments = self.session.query(ImageAttachment).filter(
+                    ImageAttachment.entity_type == 'record',
+                    ImageAttachment.entity_id == record.id
+                ).all()
                 
-                if attachments and isinstance(attachments, list):
-                    image_attachments = []
-                    for attachment in attachments:
-                        if isinstance(attachment, dict):
-                            att_type = attachment.get('type', '')
-                            att_path = attachment.get('path', '')
-                            
-                            if att_type and ('image' in att_type.lower() or 
-                               any(ext in att_path.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'])):
-                                if os.path.exists(att_path):
-                                    image_attachments.append(attachment)
+                # 2. Check ImageAttachment table for standard-linked images
+                if record.standard_id:
+                    std_images = self.session.query(ImageAttachment).filter(
+                        ImageAttachment.entity_type == 'standard',
+                        ImageAttachment.entity_id == record.standard_id
+                    ).all()
+                    image_attachments.extend(std_images)
+                
+                if image_attachments:
+                    elements.append(PageBreak())
+                    elements.append(Paragraph("Attached Images & Standard References", self.styles['CustomSubtitle']))
+                    elements.append(Spacer(1, 0.2*inch))
                     
-                    if image_attachments:
-                        elements.append(Paragraph("Attached Images", self.styles['CustomSubtitle']))
-                        elements.append(Spacer(1, 0.2*inch))
+                    for idx, img_att in enumerate(image_attachments, 1):
+                        att_path = img_att.file_path
+                        att_name = img_att.description or img_att.filename or f"Image {idx}"
                         
-                        for idx, attachment in enumerate(image_attachments, 1):
-                            att_path = attachment.get('path', '')
-                            att_name = attachment.get('name', f'Image {idx}')
-                            att_desc = attachment.get('description', '')
-                            
-                            # Image caption with description
-                            caption_text = f"<b>Figure {idx}: {att_name}</b>"
-                            if att_desc:
-                                caption_text += f"<br/>{att_desc}"
-                            
-                            caption = Paragraph(caption_text, self.styles['Normal'])
-                            elements.append(caption)
+                        if att_path and os.path.exists(att_path):
+                            # Header for the image
+                            label = "Standard Attachment" if img_att.entity_type == 'standard' else "Record Attachment"
+                            elements.append(Paragraph(f"<b>{label}:</b> {att_name}", self.styles['Normal']))
                             elements.append(Spacer(1, 0.1*inch))
                             
-                            # Add the image
                             try:
-                                img = RLImage(att_path, width=5*inch, height=4*inch, kind='proportional')
-                                elements.append(img)
+                                # Scale image
+                                from reportlab.lib.utils import ImageReader
+                                r_img = ImageReader(att_path)
+                                w, h = r_img.getSize()
+                                aspect = h / float(w)
+                                img_w = 5.5 * inch
+                                img_h = img_w * aspect
+                                if img_h > 4 * inch:
+                                    img_h = 4 * inch
+                                    img_w = img_h / aspect
+                                    
+                                elements.append(RLImage(att_path, width=img_w, height=img_h))
+                                elements.append(Spacer(1, 0.3*inch))
                             except Exception as e:
-                                error_text = Paragraph(f"<i>Could not render image: {str(e)}</i>", 
-                                                     self.styles['Normal'])
-                                elements.append(error_text)
-                            
-                            elements.append(Spacer(1, 0.3*inch))
-                            
+                                print(f"Error rendering image in statistical report: {e}")
+                                elements.append(Paragraph(f"<i>Could not render image: {att_name}</i>", self.styles['Normal']))
+                                
+                # 3. Legacy record.attachments (JSON)
+                if record.attachments:
+                    import json
+                    legacy_atts = json.loads(record.attachments) if isinstance(record.attachments, str) else record.attachments
+                    if legacy_atts and isinstance(legacy_atts, list):
+                        # Filter for actual files and add them if not already added
+                        pass # (Keep it simple for now, ImageAttachment is the way forward)
+
             except Exception as e:
-                print(f"Error adding images: {e}")
+                print(f"Error adding images to statistical report: {e}")
         
         # Build PDF
         doc.build(elements, onFirstPage=self._create_header_footer, 
@@ -872,24 +930,82 @@ class PDFGenerator:
             # Close any existing figures
             plt.close('all')
             
-            # 1. LINE CHART
+            # Organize data into record-based subgroups
+            # This is important since a record can have multiple measurements
+            subgroups = []
+            current_rn = None
+            current_subgroup = []
+            
+            for i, val in enumerate(values):
+                rn = record_numbers[i]
+                if rn != current_rn:
+                    if current_subgroup:
+                        subgroups.append({'rn': current_rn, 'vals': current_subgroup})
+                    current_rn = rn
+                    current_subgroup = []
+                current_subgroup.append(val)
+            if current_subgroup:
+                subgroups.append({'rn': current_rn, 'vals': current_subgroup})
+            
+            # Derived data for charts
+            rec_means = [np.mean(s['vals']) for s in subgroups]
+            rec_ranges = [np.max(s['vals']) - np.min(s['vals']) for s in subgroups]
+            rec_labels = [s['rn'] for s in subgroups]
+            has_subgroups = any(len(s['vals']) > 1 for s in subgroups)
+            
+            # Helper for x-axis labels on large datasets
+            def set_smart_xticks(ax, labels, count):
+                ax.set_xticks(range(count))
+                if count > 20:
+                    # Show only every Nth label to avoid overlap
+                    step = max(1, count // 10)
+                    display_labels = [labels[i] if i % step == 0 else "" for i in range(count)]
+                    ax.set_xticklabels(display_labels, rotation=45, ha='right', fontsize=8)
+                else:
+                    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+
+            # 1. LINE CHART (Individual measurements)
             print("Generating line chart...")
             fig1 = plt.figure(figsize=(10, 5))
             ax1 = fig1.add_subplot(111)
-            ax1.plot(range(len(values)), values, marker='o', linestyle='-', linewidth=2, markersize=6)
-            ax1.axhline(y=mean_val, color='r', linestyle='--', label=f'Average: {mean_val:.2f}')
+            
+            # Plot all individual values
+            ax1.plot(range(len(values)), values, marker='o', linestyle='-', color='#1f77b4', 
+                    linewidth=1.5, markersize=4, alpha=0.7, label='Measurements')
+            
+            # Overlay record averages to show trend clearly
+            # Calculate positions for averages (middle of each subgroup)
+            pos = 0
+            avg_x = []
+            for s in subgroups:
+                avg_x.append(pos + (len(s['vals']) - 1) / 2)
+                pos += len(s['vals'])
+            
+            if has_subgroups:
+                ax1.plot(avg_x, rec_means, marker='s', linestyle='--', color='darkblue', 
+                        linewidth=2, markersize=6, label='Record Average')
+
+            ax1.axhline(y=mean_val, color='r', linestyle='--', alpha=0.6, label=f'Grand Average: {mean_val:.2f}')
             
             if criteria.limit_min is not None:
-                ax1.axhline(y=float(criteria.limit_min), color='orange', linestyle='--', 
+                ax1.axhline(y=float(criteria.limit_min), color='orange', linestyle='-', linewidth=1,
                           label=f'Lower Limit: {criteria.limit_min}')
             if criteria.limit_max is not None:
-                ax1.axhline(y=float(criteria.limit_max), color='orange', linestyle='--', 
+                ax1.axhline(y=float(criteria.limit_max), color='orange', linestyle='-', linewidth=1,
                           label=f'Upper Limit: {criteria.limit_max}')
             
             ax1.set_xlabel('Record Sequence', fontsize=10)
             ax1.set_ylabel(f'Value {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
-            ax1.set_title(f'Line Chart: {criteria.code}', fontsize=12, fontweight='bold')
-            ax1.legend(fontsize=8)
+            ax1.set_title(f'Trend Analysis: {criteria.code} - {criteria.title}', fontsize=12, fontweight='bold')
+            
+            # Smart labels for individual points might be too crowded, so we label by record index
+            sample_labels = []
+            for s in subgroups:
+                for _ in range(len(s['vals'])):
+                    sample_labels.append(s['rn'])
+            set_smart_xticks(ax1, sample_labels, len(values))
+            
+            ax1.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1, 1))
             ax1.grid(True, alpha=0.3)
             
             line_chart_path = os.path.join(temp_dir, f'line_chart_{criteria.id}_{os.getpid()}.png')
@@ -898,34 +1014,40 @@ class PDFGenerator:
             plt.close(fig1)
             
             if os.path.exists(line_chart_path):
-                print(f"Line chart saved: {line_chart_path}")
                 chart_paths.append(line_chart_path)
-            else:
-                print(f"Failed to save line chart: {line_chart_path}")
             
             # 2. X-BAR CHART (Control Chart for Averages)
             print("Generating X-bar chart...")
             fig2 = plt.figure(figsize=(10, 5))
             ax2 = fig2.add_subplot(111)
             
-            # Calculate control limits (UCL, LCL)
-            ucl = mean_val + 3 * std_val
-            lcl = mean_val - 3 * std_val
+            # Use rec_means for X-bar chart instead of all points
+            data_to_plot = rec_means
+            labels_to_plot = rec_labels
             
-            ax2.plot(range(len(values)), values, marker='o', linestyle='-', linewidth=2, markersize=6)
-            ax2.axhline(y=mean_val, color='green', linestyle='-', linewidth=2, label=f'X̄: {mean_val:.2f}')
+            # Calculate control limits for the records
+            grand_avg = np.mean(data_to_plot)
+            # Use standard deviation of the record means for control limits
+            std_of_means = np.std(data_to_plot, ddof=1) if len(data_to_plot) > 1 else 0
+            ucl = grand_avg + 3 * std_of_means
+            lcl = grand_avg - 3 * std_of_means
+            
+            ax2.plot(range(len(data_to_plot)), data_to_plot, marker='o', linestyle='-', 
+                    linewidth=2, markersize=7, color='#2ca02c')
+            ax2.axhline(y=grand_avg, color='green', linestyle='-', linewidth=2, label=f'X̄: {grand_avg:.2f}')
             ax2.axhline(y=ucl, color='red', linestyle='--', linewidth=1.5, label=f'UCL: {ucl:.2f}')
             ax2.axhline(y=lcl, color='red', linestyle='--', linewidth=1.5, label=f'LCL: {lcl:.2f}')
             
             # Highlight out-of-control points
-            for i, val in enumerate(values):
+            for i, val in enumerate(data_to_plot):
                 if val > ucl or val < lcl:
                     ax2.plot(i, val, 'rx', markersize=12, markeredgewidth=2)
             
-            ax2.set_xlabel('Record Sequence', fontsize=10)
-            ax2.set_ylabel(f'Value {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
+            ax2.set_xlabel('Record Number', fontsize=10)
+            ax2.set_ylabel(f'Average Value {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
             ax2.set_title(f'X-bar Control Chart: {criteria.code}', fontsize=12, fontweight='bold')
-            ax2.legend(fontsize=8)
+            set_smart_xticks(ax2, labels_to_plot, len(data_to_plot))
+            ax2.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1, 1))
             ax2.grid(True, alpha=0.3)
             
             xbar_chart_path = os.path.join(temp_dir, f'xbar_chart_{criteria.id}_{os.getpid()}.png')
@@ -934,50 +1056,61 @@ class PDFGenerator:
             plt.close(fig2)
             
             if os.path.exists(xbar_chart_path):
-                print(f"X-bar chart saved: {xbar_chart_path}")
                 chart_paths.append(xbar_chart_path)
-            else:
-                print(f"Failed to save X-bar chart: {xbar_chart_path}")
             
             # 3. R CHART (Range Chart)
-            # Calculate moving ranges
-            if len(values) > 1:
-                print("Generating R chart...")
-                moving_ranges = [abs(values[i] - values[i-1]) for i in range(1, len(values))]
-                avg_range = np.mean(moving_ranges)
-                ucl_r = avg_range * 3.267  # D4 constant for n=2
-                
-                fig3 = plt.figure(figsize=(10, 5))
-                ax3 = fig3.add_subplot(111)
-                ax3.plot(range(1, len(moving_ranges) + 1), moving_ranges, marker='o', 
-                       linestyle='-', linewidth=2, markersize=6, color='blue')
-                ax3.axhline(y=avg_range, color='green', linestyle='-', linewidth=2, 
-                          label=f'R̄: {avg_range:.2f}')
-                ax3.axhline(y=ucl_r, color='red', linestyle='--', linewidth=1.5, 
-                          label=f'UCL: {ucl_r:.2f}')
-                ax3.axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='LCL: 0.00')
-                
-                # Highlight out-of-control points
-                for i, r in enumerate(moving_ranges):
-                    if r > ucl_r:
-                        ax3.plot(i+1, r, 'rx', markersize=12, markeredgewidth=2)
-                
-                ax3.set_xlabel('Record Sequence', fontsize=10)
-                ax3.set_ylabel(f'Moving Range {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
-                ax3.set_title(f'R Control Chart: {criteria.code}', fontsize=12, fontweight='bold')
-                ax3.legend(fontsize=8)
-                ax3.grid(True, alpha=0.3)
-                
-                r_chart_path = os.path.join(temp_dir, f'r_chart_{criteria.id}_{os.getpid()}.png')
-                plt.tight_layout()
-                fig3.savefig(r_chart_path, dpi=150, bbox_inches='tight', format='png')
-                plt.close(fig3)
-                
-                if os.path.exists(r_chart_path):
-                    print(f"R chart saved: {r_chart_path}")
-                    chart_paths.append(r_chart_path)
-                else:
-                    print(f"Failed to save R chart: {r_chart_path}")
+            # If we have subgroups, plot ranges. Otherwise, plot Moving Ranges
+            print("Generating R chart...")
+            fig3 = plt.figure(figsize=(10, 5))
+            ax3 = fig3.add_subplot(111)
+            
+            char_type = "Range"
+            if has_subgroups:
+                # Subgroup Range Chart
+                r_values = rec_ranges
+                r_labels = rec_labels
+                char_type = "Range (R)"
+                avg_r = np.mean(r_values)
+                # Simple 3-sigma limits for range
+                ucl_r = avg_r + 3 * np.std(r_values, ddof=1) if len(r_values) > 1 else avg_r * 2.5
+            else:
+                # Moving Range Chart
+                char_type = "Moving Range (mR)"
+                # Calculate moving ranges BUT ONLY within records if they had multiple points
+                # (though has_subgroups=False means they all have 1 point)
+                # So it's a standard mR chart across individual records
+                r_values = [abs(values[i] - values[i-1]) for i in range(1, len(values))]
+                r_labels = record_numbers[1:] # Skip first label
+                avg_r = np.mean(r_values)
+                ucl_r = avg_r * 3.267 # D4 for n=2
+            
+            ax3.plot(range(len(r_values)), r_values, marker='o', 
+                   linestyle='-', linewidth=2, markersize=6, color='#9467bd')
+            ax3.axhline(y=avg_r, color='green', linestyle='-', linewidth=2, 
+                      label=f'Average {char_type}: {avg_r:.2f}')
+            ax3.axhline(y=ucl_r, color='red', linestyle='--', linewidth=1.5, 
+                      label=f'UCL: {ucl_r:.2f}')
+            ax3.axhline(y=0, color='red', linestyle='--', linewidth=1.5, label='LCL: 0.00')
+            
+            # Highlight out-of-control
+            for i, r in enumerate(r_values):
+                if r > ucl_r:
+                    ax3.plot(i, r, 'rx', markersize=12, markeredgewidth=2)
+            
+            ax3.set_xlabel('Record Number', fontsize=10)
+            ax3.set_ylabel(f'{char_type} {f"({criteria.unit})" if criteria.unit else ""}', fontsize=10)
+            ax3.set_title(f'{char_type} Control Chart: {criteria.code}', fontsize=12, fontweight='bold')
+            set_smart_xticks(ax3, r_labels, len(r_values))
+            ax3.legend(fontsize=8, loc='upper left', bbox_to_anchor=(1, 1))
+            ax3.grid(True, alpha=0.3)
+            
+            r_chart_path = os.path.join(temp_dir, f'r_chart_{criteria.id}_{os.getpid()}.png')
+            plt.tight_layout()
+            fig3.savefig(r_chart_path, dpi=150, bbox_inches='tight', format='png')
+            plt.close(fig3)
+            
+            if os.path.exists(r_chart_path):
+                chart_paths.append(r_chart_path)
             
             print(f"Chart generation complete. Generated {len(chart_paths)} charts.")
             
@@ -1214,7 +1347,7 @@ class PDFGenerator:
         info_table = Table(info_data, colWidths=[2*inch, 4*inch])
         info_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#366092')),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#2f3542')),
             ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#E8F0F8')),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('PADDING', (0, 0), (-1, -1), 8),
@@ -1271,7 +1404,7 @@ class PDFGenerator:
             toc_table = Table(toc_data, colWidths=[1.5*inch, 4.5*inch])
             toc_table.setStyle(TableStyle([
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2f3542')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -1361,7 +1494,7 @@ class PDFGenerator:
                                          colWidths=[0.9*inch, 2*inch, 0.9*inch, 0.9*inch, 1.5*inch])
                     criteria_table.setStyle(TableStyle([
                         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2f3542')),
                         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -1442,6 +1575,52 @@ class PDFGenerator:
         
         elements.append(summary_table)
         
+        # ====================================================================
+        # ATTACHMENTS (Images)
+        # ====================================================================
+        try:
+            from image_handler import ImageHandler
+            handler = ImageHandler(self.session)
+            images = self.session.query(ImageAttachment).filter(
+                ImageAttachment.entity_type == 'standard',
+                ImageAttachment.entity_id == standard.id
+            ).all()
+            
+            if images:
+                elements.append(PageBreak())
+                elements.append(Paragraph("Standard Attachments / Reference Images", self.styles['CustomSubtitle']))
+                elements.append(Spacer(1, 0.2*inch))
+                
+                for img in images:
+                    img_path = handler.get_image_path(img.id)
+                    if img_path and os.path.exists(img_path):
+                        try:
+                            # Add image label/description
+                            elements.append(Paragraph(f"<b>Image:</b> {img.description or img.filename}", self.styles['Normal']))
+                            elements.append(Spacer(1, 0.1*inch))
+                            
+                            # Add image
+                            from reportlab.lib.utils import ImageReader
+                            r_img = ImageReader(img_path)
+                            w, h = r_img.getSize()
+                            aspect = h / float(w)
+                            
+                            # Max width 6 inches
+                            img_w = 6 * inch
+                            img_h = img_w * aspect
+                            
+                            # If too tall, scale down
+                            if img_h > 4 * inch:
+                                img_h = 4 * inch
+                                img_w = img_h / aspect
+                                
+                            elements.append(RLImage(img_path, width=img_w, height=img_h))
+                            elements.append(Spacer(1, 0.4*inch))
+                        except Exception as e:
+                            print(f"Error adding image to PDF: {e}")
+        except Exception as e:
+            print(f"Error loading images for standard PDF: {e}")
+            
         # Build PDF
         doc.build(elements, onFirstPage=self._create_header_footer,
                  onLaterPages=self._create_header_footer)
@@ -1490,7 +1669,7 @@ class PDFGenerator:
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, -1), 12),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#366092')),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#2f3542')),
             ('TEXTCOLOR', (0, 0), (0, -1), colors.white),
         ]))
         
@@ -1515,7 +1694,7 @@ class PDFGenerator:
         records_table = Table(records_data, colWidths=[1.5*inch, 3*inch, 1*inch, 1*inch, 1*inch, 1*inch])
         records_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2f3542')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
             ('FONTSIZE', (0, 0), (-1, -1), 9),
@@ -1599,7 +1778,6 @@ class PDFGenerator:
                             values.append(float(item.numeric_value))
                             dates.append(rec.completed_at or rec.created_at)
                             record_numbers.append(rec.record_number)
-                            break  # Only one value per record per criteria
                 
                 print(f"  Found {len(values)} values for {criteria.code}")
                 
@@ -1654,7 +1832,7 @@ class PDFGenerator:
                 stats_table = Table(stats_data, colWidths=[2.5*inch, 2*inch])
                 stats_table.setStyle(TableStyle([
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2f3542')),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                     ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                     ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -1706,6 +1884,9 @@ class PDFGenerator:
                                         self.styles['Normal']))
             else:
                 print(f"Total charts generated: {total_charts_generated}")
+        else:
+            elements.append(Paragraph("<i>No data found for statistical analysis in this date range.</i>",
+                                    self.styles['Normal']))
         
         doc.build(elements, onFirstPage=self._create_header_footer,
                  onLaterPages=self._create_header_footer)
@@ -1824,8 +2005,8 @@ class PDFGenerator:
             steps_data = [[
                 Paragraph('<b>Order</b>', self.styles['Normal']),
                 Paragraph('<b>Step Name</b>', self.styles['Normal']),
-                Paragraph('<b>Action</b>', self.styles['Normal']),
-                Paragraph('<b>Role</b>', self.styles['Normal']),
+                Paragraph('<b>Role / Action</b>', self.styles['Normal']),
+                Paragraph('<b>Logic (Success / Fail)</b>', self.styles['Normal']),
                 Paragraph('<b>Description</b>', self.styles['Normal']),
             ]]
             
@@ -1833,24 +2014,37 @@ class PDFGenerator:
                 if not isinstance(step, dict):
                     continue
                     
-                order = str(idx + 1)  # Use index as order
-                name = str(step.get('name', 'Unnamed'))[:100]  # Limit length
-                action = str(step.get('action_type', 'N/A'))
-                role = str(step.get('assigned_role', 'N/A'))
-                description = str(step.get('description', 'No description'))[:200]  # Limit length
+                order = str(idx + 1)
+                name = str(step.get('name', 'Unnamed'))
+                role_action = f"<b>Role:</b> {step.get('assigned_role', 'N/A')}<br/><b>Type:</b> {step.get('action_type', 'N/A')}"
+                
+                # Logic text
+                s_target = step.get('next_step_success', 'next')
+                s_target_text = f"Step {s_target}" if str(s_target).isdigit() else s_target.title()
+                f_target = step.get('next_step_fail', 'end')
+                f_target_text = f"Step {f_target}" if str(f_target).isdigit() else f_target.title()
+                
+                logic_text = (
+                    f"<font color='green'><b>Success:</b> -> {s_target_text}</font><br/>"
+                    f"<i>{step.get('success_action', '')}</i><br/>"
+                    f"<font color='red'><b>Fail:</b> -> {f_target_text}</font><br/>"
+                    f"<i>{step.get('fail_action', '')}</i>"
+                )
+                
+                description = str(step.get('description', 'No description'))[:300]
                 
                 steps_data.append([
                     Paragraph(order, self.styles['Normal']),
                     Paragraph(f"<b>{name}</b>", self.styles['Normal']),
-                    Paragraph(action, self.styles['Normal']),
-                    Paragraph(role, self.styles['Normal']),
+                    Paragraph(role_action, self.styles['Normal']),
+                    Paragraph(logic_text, self.styles['Normal']),
                     Paragraph(description, self.styles['Normal']),
                 ])
             
-            steps_table = Table(steps_data, colWidths=[0.5*inch, 1.5*inch, 1*inch, 1*inch, 2.2*inch])
+            steps_table = Table(steps_data, colWidths=[0.5*inch, 1.2*inch, 1.2*inch, 1.5*inch, 1.8*inch])
             steps_table.setStyle(TableStyle([
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#366092')),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2f3542')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -1872,8 +2066,9 @@ class PDFGenerator:
         return filepath
     
     def _generate_workflow_flow_diagram(self, workflow, steps):
-        """Generate visual flow diagram using matplotlib"""
+        """Generate visual flow diagram using matplotlib with branching (Success/Fail)"""
         import tempfile
+        import matplotlib.patches as patches
         
         # Validate inputs
         if not steps or not isinstance(steps, list) or len(steps) == 0:
@@ -1883,111 +2078,204 @@ class PDFGenerator:
         temp_dir = tempfile.gettempdir()
         diagram_path = os.path.join(temp_dir, f'workflow_{workflow.id}_{os.getpid()}.png')
         
-        print(f"Generating workflow diagram for {workflow.code} with {len(steps)} steps...")
-        
         try:
-            # Create figure
-            fig_height = max(len(steps) * 1.2 + 1, 3)  # Minimum height of 3 inches
-            fig = plt.figure(figsize=(8, fig_height))
+            # Calculate coordinates
+            box_width = 4.0
+            box_height = 0.8
+            vertical_spacing = 1.0
+            
+            # Add virtual START and END nodes
+            total_nodes = len(steps) + 2
+            fig_height = max(total_nodes * 1.5, 5)
+            fig = plt.figure(figsize=(10, fig_height))
             ax = fig.add_subplot(111)
+            ax.set_xlim(0, 10)
+            ax.set_ylim(-0.5, total_nodes * (box_height + vertical_spacing))
             ax.axis('off')
             
-            # Define box dimensions and spacing
-            box_width = 6.0
-            box_height = 0.8
-            vertical_spacing = 0.6
-            start_y = float(len(steps) * (box_height + vertical_spacing))
+            # Map step order to Y coordinate
+            node_coords = {}
             
-            # Colors for different action types
+            # START Node
+            start_y = (total_nodes - 1) * (box_height + vertical_spacing)
+            node_coords['start'] = (5, start_y)
+            
+            # Step Nodes
+            for i, step in enumerate(steps):
+                y = (len(steps) - i) * (box_height + vertical_spacing)
+                node_coords[i + 1] = (5, y)
+                
+            # END Node
+            node_coords['end'] = (5, 0)
+            
+            # Draw Nodes
+            # Draw START
+            ax.add_patch(patches.FancyBboxPatch((3, start_y), 4, box_height, 
+                         boxstyle="round,pad=0.1", fc='#4CAF50', ec='black', lw=2))
+            ax.text(5, start_y + box_height/2, "START", ha='center', va='center', 
+                    fontsize=12, fontweight='bold', color='white')
+            
+            # Draw Steps
             action_colors = {
-                'Review': '#FFE4B5',
-                'Approve': '#90EE90',
-                'Reject': '#FFB6C1',
-                'Submit': '#87CEEB',
-                'Notify': '#DDA0DD',
-                'Validate': '#F0E68C',
-                'Execute': '#FFA07A',
-                'Complete': '#98FB98',
-                'Custom': '#D3D3D3'
+                'Review': '#FFE4B5', 'Approve': '#90EE90', 'Reject': '#FFB6C1',
+                'Submit': '#87CEEB', 'Notify': '#DDA0DD', 'Decision': '#F0E68C',
+                'Validate': '#F0E68C', 'Execute': '#FFA07A', 'Complete': '#98FB98'
             }
             
-            # Start node
-            start_box = plt.Rectangle((1, start_y), box_width, box_height, 
-                                     facecolor='#4CAF50', edgecolor='black', linewidth=2)
-            ax.add_patch(start_box)
-            ax.text(4, start_y + box_height/2, 'START', 
-                   ha='center', va='center', fontsize=14, fontweight='bold', color='white')
-            
-            current_y = start_y - vertical_spacing - box_height
-            
-            # Draw steps
             for i, step in enumerate(steps):
-                if not isinstance(step, dict):
-                    continue
+                x, y = node_coords[i + 1]
+                color = action_colors.get(step.get('action_type'), '#D3D3D3')
+                
+                ax.add_patch(patches.FancyBboxPatch((x-2, y), 4, box_height, 
+                             boxstyle="round,pad=0.1", fc=color, ec='black', lw=1.5))
+                
+                # Title
+                ax.text(x, y + box_height*0.65, f"Step {i+1}: {step.get('name')}", 
+                        ha='center', va='center', fontsize=10, fontweight='bold')
+                
+                # Role & Action
+                role_text = f"[{step.get('assigned_role', 'Unassigned')}] - {step.get('action_type')}"
+                ax.text(x, y + box_height*0.3, role_text, 
+                        ha='center', va='center', fontsize=8, style='italic')
+
+            # Draw END
+            ax.add_patch(patches.FancyBboxPatch((3, 0), 4, box_height, 
+                         boxstyle="round,pad=0.1", fc='#f44336', ec='black', lw=2))
+            ax.text(5, box_height/2, "END", ha='center', va='center', 
+                    fontsize=12, fontweight='bold', color='white')
+
+            # Draw Connections
+            # Start to Step 1
+            ax.annotate("", xy=(5, node_coords[1][1] + box_height), xytext=(5, start_y),
+                        arrowprops=dict(arrowstyle="->", lw=1.5, color='black'))
+
+            for i, step in enumerate(steps):
+                curr_idx = i + 1
+                curr_pos = node_coords[curr_idx]
+                
+                # Success Link (Green)
+                s_target = step.get('next_step_success', 'next')
+                if s_target == 'next':
+                    target_idx = curr_idx + 1 if curr_idx < len(steps) else 'end'
+                elif s_target == 'end':
+                    target_idx = 'end'
+                else:
+                    try:
+                        target_idx = int(s_target)
+                    except:
+                        target_idx = curr_idx + 1 if curr_idx < len(steps) else 'end'
+                
+                if target_idx in node_coords:
+                    t_pos = node_coords[target_idx]
+                    s_action = step.get('success_action', '')
                     
-                step_name = str(step.get('name', 'Unnamed Step'))[:40]  # Limit length
-                action_type = str(step.get('action_type', 'Custom'))
-                role = str(step.get('assigned_role', ''))[:30] if step.get('assigned_role') else ''
+                    if target_idx == curr_idx + 1 or (curr_idx == len(steps) and target_idx == 'end'):
+                        # Direct vertical line - slightly offset to avoid overlap with fail lines
+                        ax.annotate("", xy=(4.5, t_pos[1] + box_height), xytext=(4.5, curr_pos[1]),
+                                   arrowprops=dict(arrowstyle="->", lw=2, color='green'))
+                        if s_action:
+                            ax.text(4.0, (curr_pos[1] + t_pos[1] + box_height)/2, s_action, 
+                                    ha='right', va='center', fontsize=7, color='green', rotation=90)
+                    else:
+                        # Route around left side with proper clearance
+                        step_distance = abs(target_idx if isinstance(target_idx, int) else 0 - curr_idx)
+                        x_offset = -3 - (step_distance * 0.5)  # Further left for longer jumps
+                        
+                        # Path: go left, then vertical, then right
+                        path = patches.FancyArrowPatch(
+                            (3, curr_pos[1] + box_height/2),  # Start from left edge
+                            (3, t_pos[1] + box_height/2),  # End at left edge of target
+                            connectionstyle=f"arc3,rad=0",
+                            arrowstyle="->",
+                            mutation_scale=20,
+                            lw=1.5,
+                            color='green',
+                            alpha=0.7,
+                            linestyle='--'
+                        )
+                        
+                        # Create multi-segment path
+                        from matplotlib.path import Path as MplPath
+                        vertices = [
+                            (3, curr_pos[1] + box_height/2),  # Start
+                            (x_offset, curr_pos[1] + box_height/2),  # Left
+                            (x_offset, t_pos[1] + box_height/2),  # Down/Up
+                            (3, t_pos[1] + box_height/2)  # Right to target
+                        ]
+                        codes = [MplPath.MOVETO, MplPath.LINETO, MplPath.LINETO, MplPath.LINETO]
+                        path_obj = MplPath(vertices, codes)
+                        patch = patches.PathPatch(path_obj, facecolor='none', edgecolor='green', 
+                                                 lw=1.5, alpha=0.7, linestyle='--')
+                        ax.add_patch(patch)
+                        
+                        # Add arrow at end
+                        ax.annotate("", xy=(3, t_pos[1] + box_height/2), 
+                                   xytext=(x_offset + 0.3, t_pos[1] + box_height/2),
+                                   arrowprops=dict(arrowstyle="->", lw=1.5, color='green', alpha=0.7))
+                        
+                        # Label
+                        if s_action:
+                            label_y = (curr_pos[1] + t_pos[1]) / 2
+                            ax.text(x_offset - 0.3, label_y, s_action, 
+                                    ha='center', va='center', fontsize=6, color='green',
+                                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
+                # Fail Link (Red)
+                f_target = step.get('next_step_fail', 'end')
+                if f_target == 'end':
+                    target_idx = 'end'
+                elif f_target == 'restart':
+                    target_idx = 1
+                else:
+                    try:
+                        target_idx = int(f_target)
+                    except:
+                        target_idx = 'end'
                 
-                # Draw arrow
-                arrow_start_y = float(current_y + box_height + vertical_spacing)
-                arrow_end_y = float(current_y + box_height)
-                ax.arrow(4.0, arrow_start_y, 0.0, -(arrow_start_y - arrow_end_y - 0.1),
-                        head_width=0.3, head_length=0.15, fc='black', ec='black', linewidth=2)
-                
-                # Draw step box
-                color = action_colors.get(action_type, '#D3D3D3')
-                step_box = plt.Rectangle((1.0, current_y), box_width, box_height,
-                                        facecolor=color, edgecolor='black', linewidth=1.5)
-                ax.add_patch(step_box)
-                
-                # Step number circle
-                circle = plt.Circle((1.5, current_y + box_height/2), 0.25,
-                                   facecolor='white', edgecolor='black', linewidth=1.5)
-                ax.add_patch(circle)
-                ax.text(1.5, current_y + box_height/2, str(i + 1),
-                       ha='center', va='center', fontsize=10, fontweight='bold')
-                
-                # Step text
-                ax.text(4.0, current_y + box_height * 0.65, step_name,
-                       ha='center', va='center', fontsize=11, fontweight='bold')
-                
-                # Role text
-                if role:
-                    ax.text(4.0, current_y + box_height * 0.30, f"({role})",
-                           ha='center', va='center', fontsize=8, style='italic', color='#555')
-                
-                # Action type badge
-                ax.text(6.6, current_y + box_height/2, action_type,
-                       ha='left', va='center', fontsize=8, color='#333',
-                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='gray'))
-                
-                current_y -= (box_height + vertical_spacing)
-            
-            # Draw final arrow
-            arrow_start_y = float(current_y + box_height + vertical_spacing)
-            arrow_end_y = float(current_y + box_height)
-            ax.arrow(4.0, arrow_start_y, 0.0, -(arrow_start_y - arrow_end_y - 0.1),
-                    head_width=0.3, head_length=0.15, fc='black', ec='black', linewidth=2)
-            
-            # End node
-            end_box = plt.Rectangle((1.0, current_y), box_width, box_height,
-                                   facecolor='#F44336', edgecolor='black', linewidth=2)
-            ax.add_patch(end_box)
-            ax.text(4.0, current_y + box_height/2, 'END',
-                   ha='center', va='center', fontsize=14, fontweight='bold', color='white')
-            
-            # Set axis limits
-            ax.set_xlim(0.0, 8.0)
-            ax.set_ylim(float(current_y - 0.5), float(start_y + box_height + 0.5))
-            
-            # Save figure
+                if target_idx in node_coords and target_idx != curr_idx + 1:  # Skip if same as success path
+                    t_pos = node_coords[target_idx]
+                    f_action = step.get('fail_action', '')
+                    
+                    # Route around right side with proper clearance
+                    step_distance = abs(target_idx if isinstance(target_idx, int) else 0 - curr_idx)
+                    x_offset = 7 + (step_distance * 0.5)  # Further right for longer jumps
+                    
+                    # Create multi-segment path
+                    from matplotlib.path import Path as MplPath
+                    vertices = [
+                        (7, curr_pos[1] + box_height/2),  # Start from right edge
+                        (x_offset, curr_pos[1] + box_height/2),  # Right
+                        (x_offset, t_pos[1] + box_height/2),  # Down/Up
+                        (7, t_pos[1] + box_height/2)  # Left to target
+                    ]
+                    codes = [MplPath.MOVETO, MplPath.LINETO, MplPath.LINETO, MplPath.LINETO]
+                    path_obj = MplPath(vertices, codes)
+                    patch = patches.PathPatch(path_obj, facecolor='none', edgecolor='red', 
+                                             lw=1.5, alpha=0.7, linestyle='--')
+                    ax.add_patch(patch)
+                    
+                    # Add arrow at end
+                    ax.annotate("", xy=(7, t_pos[1] + box_height/2), 
+                               xytext=(x_offset - 0.3, t_pos[1] + box_height/2),
+                               arrowprops=dict(arrowstyle="->", lw=1.5, color='red', alpha=0.7))
+                    
+                    # Label
+                    if f_action:
+                        label_y = (curr_pos[1] + t_pos[1]) / 2
+                        ax.text(x_offset + 0.3, label_y, f_action, 
+                                ha='center', va='center', fontsize=6, color='red',
+                                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
             plt.tight_layout()
             fig.savefig(diagram_path, dpi=150, bbox_inches='tight', format='png', facecolor='white')
             plt.close(fig)
-            
-            print(f"Workflow diagram saved: {diagram_path}")
             return diagram_path
+            
+        except Exception as e:
+            print(f"Error in diagram generation: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
             
         except Exception as e:
             print(f"Error in diagram generation: {e}")

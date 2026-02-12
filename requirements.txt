@@ -4,6 +4,10 @@
 # Database
 SQLAlchemy>=2.0.0
 
+# Optional: PostgreSQL support (for multi-user/server deployment)
+# Uncomment if using PostgreSQL instead of SQLite:
+# psycopg2-binary>=2.9.0
+
 # GUI Framework
 PyQt6>=6.4.0
 PyQt6-Qt6>=6.4.0
@@ -18,6 +22,9 @@ reportlab>=4.0.0
 
 # Image Processing
 Pillow>=10.0.0
+
+# Camera Support (OpenCV is more stable than Qt Multimedia on Linux)
+opencv-python>=4.8.0
 
 # Optional: For better date handling
 python-dateutil>=2.8.2

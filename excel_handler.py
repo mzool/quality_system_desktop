@@ -7,6 +7,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from datetime import datetime
 from pathlib import Path
+import random
 import pandas as pd
 from typing import List, Dict, Any
 from models import *
@@ -451,6 +452,198 @@ class ExcelHandler:
         for col in range(1, len(headers) + 1):
             ws.column_dimensions[get_column_letter(col)].width = 15
         
+        wb.save(filepath)
+        return filepath
+
+    def export_template_sample_data_to_excel(
+        self,
+        template: TestTemplate,
+        filepath: str,
+        sample_count: int,
+        under_range_count: int,
+        above_range_count: int
+    ) -> str:
+        """Export generated sample data for a template without creating records."""
+        if sample_count <= 0:
+            raise ValueError("Sample count must be greater than zero")
+
+        if under_range_count < 0 or above_range_count < 0:
+            raise ValueError("Under/Above range counts cannot be negative")
+
+        if under_range_count + above_range_count > sample_count:
+            raise ValueError("Under + Above range counts cannot exceed total samples")
+
+        in_range_count = sample_count - under_range_count - above_range_count
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sample Data"
+
+        title_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+        title_font = Font(color='FFFFFF', bold=True)
+        header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+        header_font = Font(color='FFFFFF', bold=True)
+
+        ws['A1'] = 'Template Sample Data'
+        ws['A2'] = 'Template Code'
+        ws['B2'] = template.code
+        ws['A3'] = 'Template Name'
+        ws['B3'] = template.name
+        ws['A4'] = 'Generated At'
+        ws['B4'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        ws['A5'] = 'Samples (In/Under/Above)'
+        ws['B5'] = f"{sample_count} ({in_range_count}/{under_range_count}/{above_range_count})"
+
+        ws['A1'].font = Font(bold=True, size=14)
+        for meta_row in range(2, 6):
+            ws[f'A{meta_row}'].font = Font(bold=True)
+
+        sorted_fields = sorted(template.fields, key=lambda field: field.sort_order or 0)
+        criteria_list = [field.criteria for field in sorted_fields if field.criteria is not None]
+
+        if not criteria_list:
+            raise ValueError("Selected template has no criteria fields")
+
+        header_row = 7
+        ws.cell(row=header_row, column=1, value='Sample #')
+        ws.cell(row=header_row, column=1).fill = title_fill
+        ws.cell(row=header_row, column=1).font = title_font
+
+        def _limits_for(criteria):
+            min_val = float(criteria.limit_min) if criteria.limit_min is not None else None
+            max_val = float(criteria.limit_max) if criteria.limit_max is not None else None
+            return min_val, max_val
+
+        def _format_number(value):
+            if value is None:
+                return ''
+            if isinstance(value, (int, float)):
+                if float(value).is_integer():
+                    return int(value)
+                return round(float(value), 4)
+            return value
+
+        def _generate_numeric_value(criteria, bucket):
+            min_val, max_val = _limits_for(criteria)
+
+            if min_val is not None and max_val is not None and max_val < min_val:
+                min_val, max_val = max_val, min_val
+
+            if min_val is not None and max_val is not None:
+                span = max(max_val - min_val, 1.0)
+                epsilon = max(span * 0.01, 0.01)
+                if bucket == 'under':
+                    return random.uniform(min_val - span * 0.5, min_val - epsilon)
+                if bucket == 'above':
+                    return random.uniform(max_val + epsilon, max_val + span * 0.5)
+                return random.uniform(min_val, max_val)
+
+            if min_val is not None:
+                span = max(abs(min_val) * 0.2, 1.0)
+                if bucket == 'under':
+                    return random.uniform(min_val - span * 2, min_val - 0.01)
+                if bucket == 'above':
+                    return random.uniform(min_val + 0.01, min_val + span * 2)
+                return random.uniform(min_val + 0.01, min_val + span)
+
+            if max_val is not None:
+                span = max(abs(max_val) * 0.2, 1.0)
+                if bucket == 'under':
+                    return random.uniform(max_val - span, max_val - 0.01)
+                if bucket == 'above':
+                    return random.uniform(max_val + 0.01, max_val + span * 2)
+                return random.uniform(max_val - span, max_val - 0.01)
+
+            if bucket == 'under':
+                return random.uniform(-100.0, -1.0)
+            if bucket == 'above':
+                return random.uniform(1.0, 100.0)
+            return random.uniform(-1.0, 1.0)
+
+        def _is_pass_numeric(criteria, numeric_value):
+            min_val, max_val = _limits_for(criteria)
+            if min_val is not None and numeric_value < min_val:
+                return False
+            if max_val is not None and numeric_value > max_val:
+                return False
+            if min_val is None and max_val is None:
+                return None
+            return True
+
+        criteria_data = []
+        for idx, criteria in enumerate(criteria_list, start=2):
+            header = f"{criteria.code} - {criteria.title}"
+            ws.cell(row=header_row, column=idx, value=header)
+            ws.cell(row=header_row, column=idx).fill = header_fill
+            ws.cell(row=header_row, column=idx).font = header_font
+            ws.cell(row=header_row, column=idx).alignment = Alignment(horizontal='center', wrap_text=True)
+
+            buckets = (['under'] * under_range_count) + (['above'] * above_range_count) + (['in'] * in_range_count)
+            random.shuffle(buckets)
+            criteria_data.append((criteria, buckets))
+
+        start_row = header_row + 1
+        for sample_idx in range(sample_count):
+            row = start_row + sample_idx
+            ws.cell(row=row, column=1, value=sample_idx + 1)
+
+            for col_idx, (criteria, buckets) in enumerate(criteria_data, start=2):
+                data_type = (criteria.data_type or '').lower()
+                bucket = buckets[sample_idx]
+
+                if data_type == 'numeric':
+                    numeric_value = _generate_numeric_value(criteria, bucket)
+                    value = _format_number(numeric_value)
+                elif data_type == 'boolean':
+                    value = random.choice([True, False])
+                elif data_type == 'date':
+                    value = datetime.now().date()
+                elif data_type in ['select', 'multiselect']:
+                    options = criteria.options if isinstance(criteria.options, list) else []
+                    if not options:
+                        options = ['Option A', 'Option B', 'Option C']
+                    if data_type == 'multiselect':
+                        picks = random.sample(options, k=min(2, len(options)))
+                        value = ', '.join(str(item) for item in picks)
+                    else:
+                        value = random.choice(options)
+                else:
+                    value = f"Sample {sample_idx + 1}"
+
+                ws.cell(row=row, column=col_idx, value=value)
+
+        # Criteria details sheet
+        ws_info = wb.create_sheet('Criteria Info')
+        info_headers = ['Code', 'Title', 'Type', 'Min', 'Max', 'Unit', 'Expected Distribution (In/Under/Above)']
+        for col, header in enumerate(info_headers, 1):
+            cell = ws_info.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+
+        for row_idx, criteria in enumerate(criteria_list, 2):
+            ws_info.cell(row=row_idx, column=1, value=criteria.code)
+            ws_info.cell(row=row_idx, column=2, value=criteria.title)
+            ws_info.cell(row=row_idx, column=3, value=criteria.data_type)
+            ws_info.cell(row=row_idx, column=4, value=float(criteria.limit_min) if criteria.limit_min is not None else '')
+            ws_info.cell(row=row_idx, column=5, value=float(criteria.limit_max) if criteria.limit_max is not None else '')
+            ws_info.cell(row=row_idx, column=6, value=criteria.unit or '')
+            ws_info.cell(row=row_idx, column=7, value=f"{in_range_count}/{under_range_count}/{above_range_count}")
+
+        for worksheet in [ws, ws_info]:
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = get_column_letter(column[0].column)
+                for cell in column:
+                    try:
+                        if cell.value is not None:
+                            max_length = max(max_length, len(str(cell.value)))
+                    except Exception:
+                        pass
+                worksheet.column_dimensions[column_letter].width = min(max_length + 2, 50)
+
+        ws.freeze_panes = 'B8'
+        ws_info.freeze_panes = 'A2'
+
         wb.save(filepath)
         return filepath
     

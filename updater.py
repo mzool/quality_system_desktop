@@ -3,13 +3,11 @@ Auto-updater for Quality Management System
 Checks for updates and downloads new versions
 """
 import requests
-import json
 import os
 import sys
 import tempfile
 import subprocess
 import platform
-from pathlib import Path
 from version import __version__, __update_url__, __download_url__
 
 
@@ -21,6 +19,25 @@ class Updater:
         self.update_url = __update_url__
         self.download_url = __download_url__
         self.system = platform.system()
+
+    def detect_current_install_path(self):
+        """Detect the currently running installed binary path."""
+        try:
+            appimage_env = os.environ.get("APPIMAGE")
+            if appimage_env and os.path.isfile(appimage_env):
+                return appimage_env
+
+            executable = sys.executable if getattr(sys, 'frozen', False) else None
+            if executable and os.path.isfile(executable):
+                return executable
+
+            argv0 = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else None
+            if argv0 and os.path.isfile(argv0):
+                return argv0
+        except Exception:
+            pass
+
+        return None
     
     def check_for_updates(self):
         """
@@ -79,7 +96,6 @@ class Updater:
                     }
             else:
                 print(f"HTTP error: {response.status_code}")
-                return None
                 return None
                 
         except Exception as e:
@@ -162,7 +178,7 @@ class Updater:
             print(f"Download failed: {e}")
             return None
     
-    def install_update(self, installer_path):
+    def install_update(self, installer_path, install_target_path=None, relaunch=True):
         """
         Install the downloaded update
         
@@ -173,16 +189,67 @@ class Updater:
             bool: True if install initiated successfully
         """
         try:
+            current_pid = os.getpid()
+
             if self.system == 'Windows':
-                # Run installer and exit current app
-                subprocess.Popen([installer_path])
+                target_path = install_target_path or self.detect_current_install_path()
+                if not target_path:
+                    subprocess.Popen([installer_path])
+                    return True
+
+                updater_bat = os.path.join(tempfile.gettempdir(), "qms_apply_update.bat")
+                with open(updater_bat, 'w', encoding='utf-8') as f:
+                    f.write('@echo off\n')
+                    f.write('setlocal\n')
+                    f.write(f'set "TARGET={target_path}"\n')
+                    f.write(f'set "SOURCE={installer_path}"\n')
+                    f.write(f'set "PID={current_pid}"\n')
+                    f.write(':waitloop\n')
+                    f.write('tasklist /FI "PID eq %PID%" | findstr /I "%PID%" >nul\n')
+                    f.write('if not errorlevel 1 (\n')
+                    f.write('  timeout /t 1 /nobreak >nul\n')
+                    f.write('  goto waitloop\n')
+                    f.write(')\n')
+                    f.write('timeout /t 1 /nobreak >nul\n')
+                    f.write('copy /Y "%SOURCE%" "%TARGET%" >nul\n')
+                    if relaunch:
+                        f.write('start "" "%TARGET%"\n')
+                    f.write('del "%SOURCE%" >nul 2>nul\n')
+                    f.write('del "%~f0" >nul 2>nul\n')
+
+                subprocess.Popen(
+                    ['cmd', '/c', updater_bat],
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                )
                 return True
                 
             elif self.system == 'Linux':
-                # Make AppImage executable
+                target_path = install_target_path or self.detect_current_install_path()
+
                 os.chmod(installer_path, 0o755)
-                # Run it
-                subprocess.Popen([installer_path])
+
+                if not target_path:
+                    subprocess.Popen([installer_path])
+                    return True
+
+                update_script = os.path.join(tempfile.gettempdir(), 'qms_apply_update.sh')
+                with open(update_script, 'w', encoding='utf-8') as f:
+                    f.write('#!/bin/sh\n')
+                    f.write(f'PID={current_pid}\n')
+                    f.write(f'TARGET="{target_path}"\n')
+                    f.write(f'SOURCE="{installer_path}"\n')
+                    f.write('while kill -0 "$PID" 2>/dev/null; do sleep 1; done\n')
+                    f.write('sleep 1\n')
+                    f.write('chmod +x "$SOURCE"\n')
+                    f.write('cp -f "$SOURCE" "$TARGET"\n')
+                    f.write('chmod +x "$TARGET"\n')
+                    if relaunch:
+                        f.write('nohup "$TARGET" >/dev/null 2>&1 &\n')
+                    f.write('rm -f "$SOURCE"\n')
+                    f.write('rm -f "$0"\n')
+
+                os.chmod(update_script, 0o755)
+                subprocess.Popen(['sh', update_script])
                 return True
                 
             else:  # macOS

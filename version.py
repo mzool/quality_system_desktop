@@ -2,7 +2,7 @@
 Version information for Quality Management System
 """
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 __build__ = "20260210"
 __app_name__ = "Quality Management System"
 __author__ = "Mohammad Basem"

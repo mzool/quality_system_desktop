@@ -7371,18 +7371,19 @@ class MainWindow(QMainWindow):
         progress.close()
         
         if installer_path:
+            install_target_path = updater.detect_current_install_path()
             reply = QMessageBox.question(
                 self,
                 "Install Update",
                 "Update downloaded successfully!\n\n"
-                "The application will close and the installer will start.\n"
+                "The application will close, replace the installed app, and restart.\n"
                 "Do you want to continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             
             if reply == QMessageBox.StandardButton.Yes:
                 # Install and exit
-                if updater.install_update(installer_path):
+                if updater.install_update(installer_path, install_target_path=install_target_path, relaunch=True):
                     QApplication.quit()
         else:
             QMessageBox.warning(
@@ -7694,6 +7695,8 @@ class MainWindow(QMainWindow):
         btn_delete_template.setEnabled(self.has_permission('can_edit_templates'))
         btn_export_template = QPushButton("Export Template")
         btn_export_template.clicked.connect(self.export_template)
+        btn_sample_creation = QPushButton("Sample Creation")
+        btn_sample_creation.clicked.connect(self.generate_template_samples)
         btn_refresh_templates = QPushButton("Refresh")
         btn_refresh_templates.clicked.connect(self.load_templates)
         
@@ -7701,6 +7704,7 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(btn_edit_template)
         toolbar_layout.addWidget(btn_delete_template)
         toolbar_layout.addWidget(btn_export_template)
+        toolbar_layout.addWidget(btn_sample_creation)
         toolbar_layout.addStretch()
         toolbar_layout.addWidget(btn_refresh_templates)
         
@@ -8376,6 +8380,101 @@ class MainWindow(QMainWindow):
                 self.statusbar.showMessage("Template exported successfully", 3000)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to export template:\n{str(e)}")
+
+    def generate_template_samples(self):
+        """Generate sample data for selected template and export to Excel."""
+        selected_rows = self.templates_table.selectedItems()
+        if not selected_rows:
+            QMessageBox.warning(self, "No Selection", "Please select a template")
+            return
+
+        try:
+            template_id = int(self.templates_table.item(self.templates_table.currentRow(), 0).text())
+            template = self.session.get(TestTemplate, template_id)
+
+            if not template:
+                QMessageBox.warning(self, "Error", "Template not found")
+                return
+
+            if not template.fields:
+                QMessageBox.warning(self, "No Criteria", "Selected template has no criteria fields")
+                return
+
+            sample_count, ok = QInputDialog.getInt(
+                self,
+                "Sample Creation",
+                "Number of samples:",
+                30,
+                1,
+                100000,
+                1
+            )
+            if not ok:
+                return
+
+            under_range_count, ok = QInputDialog.getInt(
+                self,
+                "Sample Creation",
+                "How many samples under range?",
+                5,
+                0,
+                sample_count,
+                1
+            )
+            if not ok:
+                return
+
+            max_above = sample_count - under_range_count
+            above_range_count, ok = QInputDialog.getInt(
+                self,
+                "Sample Creation",
+                "How many samples above range?",
+                min(5, max_above),
+                0,
+                max_above,
+                1
+            )
+            if not ok:
+                return
+
+            in_range_count = sample_count - under_range_count - above_range_count
+            if in_range_count < 0:
+                QMessageBox.warning(self, "Invalid Input", "Under + Above cannot exceed total samples")
+                return
+
+            filepath, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Sample Excel File",
+                f"{template.code}_sample_data.xlsx",
+                "Excel Files (*.xlsx)"
+            )
+
+            if not filepath:
+                return
+
+            excel_handler = ExcelHandler(self.session)
+            excel_handler.export_template_sample_data_to_excel(
+                template,
+                filepath,
+                sample_count,
+                under_range_count,
+                above_range_count
+            )
+
+            QMessageBox.information(
+                self,
+                "Success",
+                "Sample data file created successfully!\n\n"
+                f"Template: {template.code}\n"
+                f"Total Samples: {sample_count}\n"
+                f"In Range: {in_range_count}\n"
+                f"Under Range: {under_range_count}\n"
+                f"Above Range: {above_range_count}\n\n"
+                f"Saved to:\n{filepath}"
+            )
+            self.statusbar.showMessage("Sample data exported successfully", 4000)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to generate sample data:\n{str(e)}")
     
     def new_standard_dialog(self):
         """Open dialog to create new standard"""

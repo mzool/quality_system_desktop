@@ -560,49 +560,15 @@ class PDFGenerator:
                 traceback.print_exc()
 
         # ====================================================================
-        # STANDARD ATTACHMENTS (if applicable)
+        # STANDARD ATTACHMENTS - DISABLED
+        # Only record-specific images are included, not standard-level images
+        # This ensures images attached to a record only appear in that record's PDF
         # ====================================================================
-        if record.standard and self.session:
-            try:
-                std_images = self.session.query(ImageAttachment).filter(
-                    ImageAttachment.entity_type == 'standard',
-                    ImageAttachment.entity_id == record.standard.id
-                ).all()
-                
-                if std_images:
-                    elements.append(PageBreak())
-                    elements.append(Paragraph(f"Standard References: {record.standard.name}", self.styles['CustomSubtitle']))
-                    elements.append(Spacer(1, 0.2*inch))
-                    
-                    for s_img in std_images:
-                        s_img_path = s_img.file_path
-                        if s_img_path and os.path.exists(s_img_path):
-                            elements.append(Paragraph(f"<b>Standard Reference:</b> {s_img.description or s_img.filename}", self.styles['Normal']))
-                            elements.append(Spacer(1, 0.1*inch))
-                            
-                            try:
-                                from reportlab.lib.utils import ImageReader
-                                r_img = ImageReader(s_img_path)
-                                w, h = r_img.getSize()
-                                aspect = h / float(w)
-                                
-                                img_w = 5.5 * inch
-                                img_h = img_w * aspect
-                                
-                                if img_h > 4 * inch:
-                                    img_h = 4 * inch
-                                    img_w = img_h / aspect
-                                    
-                                elements.append(RLImage(s_img_path, width=img_w, height=img_h))
-                                elements.append(Spacer(1, 0.4*inch))
-                            except Exception as e:
-                                print(f"Error rendering standard image: {e}")
-            except Exception as e:
-                print(f"Error adding standard images to record PDF: {e}")
         
         # ====================================================================
         # BUILD PDF
         # ====================================================================
+
         
         doc.build(elements, onFirstPage=self._create_header_footer, 
                  onLaterPages=self._create_header_footer)
@@ -859,23 +825,17 @@ class PDFGenerator:
         # ====================================================================
         if include_images and self.session:
             try:
-                # 1. Check ImageAttachment table for record-linked images
+                # Query ImageAttachment table for record-specific images ONLY
                 image_attachments = self.session.query(ImageAttachment).filter(
                     ImageAttachment.entity_type == 'record',
                     ImageAttachment.entity_id == record.id
                 ).all()
                 
-                # 2. Check ImageAttachment table for standard-linked images
-                if record.standard_id:
-                    std_images = self.session.query(ImageAttachment).filter(
-                        ImageAttachment.entity_type == 'standard',
-                        ImageAttachment.entity_id == record.standard_id
-                    ).all()
-                    image_attachments.extend(std_images)
+                # Do NOT include standard-level images - only record-specific images
                 
                 if image_attachments:
                     elements.append(PageBreak())
-                    elements.append(Paragraph("Attached Images & Standard References", self.styles['CustomSubtitle']))
+                    elements.append(Paragraph("Attached Images", self.styles['CustomSubtitle']))
                     elements.append(Spacer(1, 0.2*inch))
                     
                     for idx, img_att in enumerate(image_attachments, 1):
@@ -883,9 +843,8 @@ class PDFGenerator:
                         att_name = img_att.description or img_att.filename or f"Image {idx}"
                         
                         if att_path and os.path.exists(att_path):
-                            # Header for the image
-                            label = "Standard Attachment" if img_att.entity_type == 'standard' else "Record Attachment"
-                            elements.append(Paragraph(f"<b>{label}:</b> {att_name}", self.styles['Normal']))
+                            # Header for the image (record-specific only now)
+                            elements.append(Paragraph(f"<b>Attachment {idx}:</b> {att_name}", self.styles['Normal']))
                             elements.append(Spacer(1, 0.1*inch))
                             
                             try:

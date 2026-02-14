@@ -25,6 +25,7 @@ from PyQt6.QtCore import Qt, QDate, QTimer
 from PyQt6.QtGui import QAction, QFont, QImage, QPixmap, QPalette, QColor
 from datetime import datetime, timedelta
 from pathlib import Path
+from decimal import Decimal
 import json
 
 # Import our modules
@@ -226,6 +227,10 @@ class RecordDialog(QDialog):
         btn_load_template.clicked.connect(self.load_template_fields_to_table)
         btn_load_template.setToolTip("Add all fields from selected template to the table")
         
+        btn_import_excel = QPushButton("Import from Excel")
+        btn_import_excel.clicked.connect(self.import_items_from_excel)
+        btn_import_excel.setToolTip("Import record items from Excel file")
+        
         btn_clear_items = QPushButton("Clear All")
         btn_clear_items.clicked.connect(self.clear_all_items)
         btn_clear_items.setToolTip("Clear all items from the table")
@@ -238,6 +243,7 @@ class RecordDialog(QDialog):
         btn_remove_item.clicked.connect(self.remove_record_item)
         
         items_toolbar.addWidget(btn_load_template)
+        items_toolbar.addWidget(btn_import_excel)
         items_toolbar.addWidget(btn_clear_items)
         items_toolbar.addWidget(btn_add_item)
         items_toolbar.addWidget(btn_remove_item)
@@ -1130,7 +1136,7 @@ class RecordDialog(QDialog):
                 
                 # Calculate compliance_score (percentage of passing items)
                 if items_with_compliance:
-                    self.record.compliance_score = (len(passed_items) / len(items_with_compliance)) * 100
+                    self.record.compliance_score = Decimal(len(passed_items)) / Decimal(len(items_with_compliance)) * Decimal('100')
                 else:
                     self.record.compliance_score = None
                 
@@ -1180,7 +1186,161 @@ class RecordDialog(QDialog):
         
         QMessageBox.information(self, "Attached Images", msg)
     
+    def import_items_from_excel(self):
+        """Import record items from Excel with column mapping"""
+        # Check if template is selected
+        template_id = self.template_combo.currentData()
+        if not template_id:
+            QMessageBox.warning(self, "Template Required", "Please select a template first.")
+            return
+        
+        # Get template and its fields
+        template = self.session.get(TestTemplate, template_id)
+        if not template or not template.fields:
+            QMessageBox.warning(self, "No Fields", "Selected template has no criteria fields.")
+            return
+        
+        # Select Excel file
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Excel File",
+            "",
+            "Excel Files (*.xlsx *.xls)"
+        )
+        
+        if not filepath:
+            return
+        
+        try:
+            import openpyxl
+            
+            # Read Excel file
+            wb = openpyxl.load_workbook(filepath)
+            ws = wb.active
+            
+            # Get headers from first row
+            headers = []
+            for cell in ws[1]:
+                headers.append(cell.value if cell.value else f"Column {cell.column}")
+            
+            if not headers:
+                QMessageBox.warning(self, "Empty File", "Excel file has no data.")
+                return
+            
+            # Show column mapping dialog
+            mapping_dialog = ColumnMappingDialog(template, headers, self)
+            if mapping_dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            
+            column_mapping = mapping_dialog.get_mapping()
+            if not column_mapping:
+                QMessageBox.warning(self, "No Mapping", "No columns mapped to criteria.")
+                return
+            
+            # Import data
+            imported_count = 0
+            skipped_count = 0
+            
+            # Block signals to prevent auto-validation during import
+            self.items_table.blockSignals(True)
+            
+            # Start from row 2 (skip header)
+            for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+                for criteria_code, col_info in column_mapping.items():
+                    col_idx = col_info['col_index']
+                    criteria_id = col_info['criteria_id']
+                    field_id = col_info['field_id']
+                    
+                    # Get value from Excel
+                    if col_idx < len(row):
+                        value = row[col_idx]
+                        
+                        # Skip empty values
+                        if value is None or value == '':
+                            continue
+                        
+                        # Get criteria to check type
+                        criteria = self.session.get(StandardCriteria, criteria_id)
+                        if not criteria:
+                            continue
+                        
+                        # Add row to table
+                        row_position = self.items_table.rowCount()
+                        self.items_table.insertRow(row_position)
+                        
+                        # Item ID (hidden)
+                        self.items_table.setItem(row_position, 0, QTableWidgetItem(''))
+                        
+                        # Field ID (hidden)
+                        self.items_table.setItem(row_position, 1, QTableWidgetItem(str(field_id)))
+                        
+                        # Criteria Code
+                        self.items_table.setItem(row_position, 2, QTableWidgetItem(criteria.code))
+                        
+                        # Title
+                        self.items_table.setItem(row_position, 3, QTableWidgetItem(criteria.title))
+                        
+                        # Value
+                        value_str = str(value)
+                        self.items_table.setItem(row_position, 4, QTableWidgetItem(value_str))
+                        
+                        # Calculate compliance
+                        compliance_result = None
+                        if criteria.data_type == 'numeric':
+                            try:
+                                numeric_value = float(value)
+                                if criteria.limit_min is not None and criteria.limit_max is not None:
+                                    min_val = float(criteria.limit_min)
+                                    max_val = float(criteria.limit_max)
+                                    compliance_result = 'Pass' if min_val <= numeric_value <= max_val else 'Fail'
+                                else:
+                                    compliance_result = 'Pass'
+                            except (ValueError, TypeError):
+                                compliance_result = 'N/A'
+                        elif criteria.data_type == 'boolean':
+                            if str(value).lower() in ['yes', 'true', '1', 'pass']:
+                                compliance_result = 'Pass'
+                            elif str(value).lower() in ['no', 'false', '0', 'fail']:
+                                compliance_result = 'Fail'
+                        else:
+                            compliance_result = 'Pass'  # Default for text/select
+                        
+                        # Compliance
+                        compliance_item = QTableWidgetItem(compliance_result or 'N/A')
+                        self.items_table.setItem(row_position, 5, compliance_item)
+                        
+                        # Deviation (empty for now)
+                        self.items_table.setItem(row_position, 6, QTableWidgetItem(''))
+                        
+                        # Remarks (empty for now)
+                        self.items_table.setItem(row_position, 7, QTableWidgetItem(''))
+                        
+                        # Make cells editable
+                        for col in range(2, 8):
+                            item = self.items_table.item(row_position, col)
+                            if item:
+                                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                        
+                        imported_count += 1
+            
+            # Unblock signals
+            self.items_table.blockSignals(False)
+            
+            QMessageBox.information(
+                self,
+                "Import Complete",
+                f"Successfully imported {imported_count} items from Excel.\n\n"
+                f"File: {filepath}\n"
+                f"Rows processed: {ws.max_row - 1}"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Import Error", f"Failed to import from Excel:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+    
     def save_record(self):
+
         """Save the record"""
         # Validation
         if not self.title_input.text().strip():
@@ -1286,7 +1446,7 @@ class RecordDialog(QDialog):
                 
                 # Calculate compliance_score (percentage of passing items)
                 if items_with_compliance:
-                    record.compliance_score = (len(passed_items) / len(items_with_compliance)) * 100
+                    record.compliance_score = Decimal(len(passed_items)) / Decimal(len(items_with_compliance)) * Decimal('100')
                 else:
                     record.compliance_score = None
                 
@@ -1616,7 +1776,7 @@ class RecordItemDialog(QDialog):
                 
                 # Calculate compliance_score (percentage of passing items)
                 if items_with_compliance:
-                    self.record.compliance_score = (len(passed_items) / len(items_with_compliance)) * 100
+                    self.record.compliance_score = Decimal(len(passed_items)) / Decimal(len(items_with_compliance)) * Decimal('100')
                 else:
                     self.record.compliance_score = None
                 
@@ -1780,6 +1940,145 @@ class RecordItemDialog(QDialog):
                 return f"{size_bytes:.1f} {unit}"
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} TB"
+
+
+class ColumnMappingDialog(QDialog):
+    """Dialog for mapping Excel columns to criteria fields"""
+    
+    def __init__(self, template, excel_headers, parent=None):
+        super().__init__(parent)
+        self.template = template
+        self.excel_headers = excel_headers
+        self.mapping_combos = {}
+        
+        self.setWindowTitle("Map Excel Columns to Criteria")
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(500)
+        
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+        
+        # Instructions
+        instructions = QLabel(
+            "<b>Map Excel Columns to Criteria Fields</b><br>"
+            "Select which Excel column contains data for each criteria field. "
+            "Each row in the Excel file will become a separate record item for that criteria."
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("padding: 10px; background-color: #e3f2fd; border-radius: 4px;")
+        layout.addWidget(instructions)
+        
+        # Mapping table
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout()
+        scroll_widget.setLayout(scroll_layout)
+        scroll.setWidget(scroll_widget)
+        
+        # Create mapping row for each criteria
+        for field in template.fields:
+            criteria = field.criteria
+            
+            field_group = QGroupBox(f"{criteria.code} - {criteria.title}")
+            field_layout = QFormLayout()
+            field_group.setLayout(field_layout)
+            
+            # Info
+            info_text = f"Type: {criteria.data_type}"
+            if criteria.data_type == 'numeric' and criteria.limit_min is not None and criteria.limit_max is not None:
+                info_text += f" | Range: {criteria.limit_min} - {criteria.limit_max}"
+            if criteria.unit:
+                info_text += f" | Unit: {criteria.unit}"
+            
+            info_label = QLabel(info_text)
+            info_label.setStyleSheet("color: #666; font-size: 10px;")
+            field_layout.addRow("Info:", info_label)
+            
+            # Column mapping combo
+            combo = QComboBox()
+            combo.addItem("-- Skip this criteria --", None)
+            for idx, header in enumerate(self.excel_headers):
+                combo.addItem(f"Column {idx + 1}: {header}", idx)
+            
+            field_layout.addRow("Excel Column:", combo)
+            
+            # Store combo with criteria info
+            self.mapping_combos[criteria.code] = {
+                'combo': combo,
+                'criteria_id': criteria.id,
+                'field_id': field.id
+            }
+            
+            scroll_layout.addWidget(field_group)
+        
+        layout.addWidget(scroll)
+        
+        # Auto-map button
+        btn_auto_map = QPushButton("Auto-Map Columns")
+        btn_auto_map.setToolTip("Automatically map columns based on matching names")
+        btn_auto_map.clicked.connect(self.auto_map_columns)
+        layout.addWidget(btn_auto_map)
+        
+        # Buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | 
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def auto_map_columns(self):
+        """Automatically map columns based on name matching"""
+        mapped_count = 0
+        
+        for criteria_code, mapping_info in self.mapping_combos.items():
+            combo = mapping_info['combo']
+            
+            # Try to find matching column
+            for idx, header in enumerate(self.excel_headers):
+                header_lower = str(header).lower()
+                code_lower = criteria_code.lower()
+                
+                # Check if header contains criteria code or vice versa
+                if code_lower in header_lower or header_lower in code_lower:
+                    # Set combo to this column (idx + 1 because index 0 is "Skip")
+                    combo.setCurrentIndex(idx + 1)
+                    mapped_count += 1
+                    break
+        
+        if mapped_count > 0:
+            QMessageBox.information(
+                self,
+                "Auto-Mapping Complete",
+                f"Automatically mapped {mapped_count} columns based on name matching.\n\n"
+                "Please review and adjust the mappings as needed."
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "No Matches Found",
+                "Could not automatically map any columns based on name matching.\n"
+                "Please map columns manually."
+            )
+    
+    def get_mapping(self):
+        """Get the column mapping dictionary"""
+        mapping = {}
+        
+        for criteria_code, mapping_info in self.mapping_combos.items():
+            combo = mapping_info['combo']
+            col_idx = combo.currentData()
+            
+            if col_idx is not None:  # Not skipped
+                mapping[criteria_code] = {
+                    'col_index': col_idx,
+                    'criteria_id': mapping_info['criteria_id'],
+                    'field_id': mapping_info['field_id']
+                }
+        
+        return mapping
 
 
 class TemplateDialog(QDialog):
@@ -8473,6 +8772,295 @@ class MainWindow(QMainWindow):
                 f"Saved to:\n{filepath}"
             )
             self.statusbar.showMessage("Sample data exported successfully", 4000)
+            
+            # Ask if user wants to save as record
+            save_as_record = QMessageBox.question(
+                self,
+                "Save as Record",
+                "Do you want to save this sample data as a record?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            saved_record = None
+            if save_as_record == QMessageBox.StandardButton.Yes:
+                # Ask for record title
+                record_title, ok = QInputDialog.getText(
+                    self,
+                    "Record Title",
+                    "Enter record title:",
+                    text=f"Sample Data - {template.name}"
+                )
+                
+                if ok and record_title.strip():
+                    try:
+                        # Generate sample data and create record
+                        from datetime import datetime
+                        import random
+                        
+                        record_number = f"REC-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                        
+                        notes_text = f"Sample data with {sample_count} readings per criteria.\n"
+                        notes_text += f"In Range: {in_range_count}, Under Range: {under_range_count}, Above Range: {above_range_count}"
+                        
+                        saved_record = Record(
+                            record_number=record_number,
+                            template_id=template.id,
+                            standard_id=template.standard_id,
+                            title=record_title.strip(),
+                            category=template.category or 'inspection',
+                            status='draft',
+                            priority='medium',
+                            scheduled_date=datetime.now(),
+                            due_date=datetime.now() + timedelta(days=7),
+                            started_at=datetime.now(),
+                            completed_at=None,
+                            created_by_id=self.current_user.id,
+                            assigned_to_id=self.current_user.id,
+                            reviewed_by_id=None,
+                            approved_by_id=None,
+                            batch_number=f"BATCH-SAMPLE-{datetime.now().strftime('%Y%m%d')}",
+                            product_id=f"PROD-SAMPLE-{random.randint(100, 999)}",
+                            process_id=None,
+                            location="Sample Location",
+                            department=self.current_user.department or "Quality Control",
+                            shift=None,
+                            notes=notes_text,
+                            internal_notes=None
+                        )
+                        
+                        self.session.add(saved_record)
+                        self.session.flush()
+                        
+                        # Generate sample items - multiple samples per criteria
+                        passed = 0
+                        failed = 0
+                        total_items = 0
+                        
+                        for field in template.fields:
+                            criteria = field.criteria
+                            
+                            # Determine how many of each type for this criteria
+                            samples_for_criteria = []
+                            
+                            # Calculate distribution for this criteria
+                            in_range_for_criteria = in_range_count
+                            under_range_for_criteria = under_range_count
+                            above_range_for_criteria = above_range_count
+                            
+                            # Create samples in range
+                            for _ in range(in_range_for_criteria):
+                                samples_for_criteria.append('in_range')
+                            
+                            # Create samples under range
+                            for _ in range(under_range_for_criteria):
+                                samples_for_criteria.append('under_range')
+                            
+                            # Create samples above range
+                            for _ in range(above_range_for_criteria):
+                                samples_for_criteria.append('above_range')
+                            
+                            # Shuffle to randomize order
+                            random.shuffle(samples_for_criteria)
+                            
+                            # Generate items based on criteria type
+                            for sample_type in samples_for_criteria:
+                                if criteria.data_type == 'numeric':
+                                    if criteria.limit_min is not None and criteria.limit_max is not None:
+                                        # Convert Decimal to float for random.uniform
+                                        min_val = float(criteria.limit_min)
+                                        max_val = float(criteria.limit_max)
+                                        
+                                        if sample_type == 'in_range':
+                                            value = random.uniform(min_val, max_val)
+                                            compliance = True
+                                        elif sample_type == 'under_range':
+                                            value = random.uniform(min_val - 5, min_val - 0.1)
+                                            compliance = False
+                                        else:  # above_range
+                                            value = random.uniform(max_val + 0.1, max_val + 5)
+                                            compliance = False
+                                    else:
+                                        value = random.uniform(0, 100)
+                                        compliance = True
+                                    
+                                    item = RecordItem(
+                                        record_id=saved_record.id,
+                                        criteria_id=criteria.id,
+                                        value=f"{value:.2f}",
+                                        numeric_value=Decimal(str(value)),
+                                        compliance=compliance,
+                                        measured_by_id=self.current_user.id
+                                    )
+                                
+                                elif criteria.data_type == 'select':
+                                    if criteria.options:
+                                        value = random.choice(criteria.options)
+                                    else:
+                                        value = "N/A"
+                                    compliance = sample_type == 'in_range'
+                                    
+                                    item = RecordItem(
+                                        record_id=saved_record.id,
+                                        criteria_id=criteria.id,
+                                        value=value,
+                                        compliance=compliance,
+                                        measured_by_id=self.current_user.id
+                                    )
+                                
+                                elif criteria.data_type == 'boolean':
+                                    compliance = sample_type == 'in_range'
+                                    value = 'Yes' if compliance else 'No'
+                                    
+                                    item = RecordItem(
+                                        record_id=saved_record.id,
+                                        criteria_id=criteria.id,
+                                        value=value,
+                                        compliance=compliance,
+                                        measured_by_id=self.current_user.id
+                                    )
+                                
+                                else:
+                                    value = f"Sample {sample_type}"
+                                    compliance = sample_type == 'in_range'
+                                    
+                                    item = RecordItem(
+                                        record_id=saved_record.id,
+                                        criteria_id=criteria.id,
+                                        value=value,
+                                        compliance=compliance,
+                                        measured_by_id=self.current_user.id
+                                    )
+                                
+                                self.session.add(item)
+                                total_items += 1
+                                
+                                if compliance:
+                                    passed += 1
+                                else:
+                                    failed += 1
+                        
+                        # Update record summary
+                        total = passed + failed
+                        saved_record.compliance_score = Decimal(passed) / Decimal(total) * Decimal('100') if total > 0 else Decimal('0')
+                        saved_record.overall_compliance = failed == 0
+                        saved_record.failed_items_count = failed
+                        saved_record.completed_at = datetime.now()
+                        saved_record.status = 'completed'
+                        
+                        # Update reviewed and approved if compliance is 100%
+                        if saved_record.overall_compliance:
+                            saved_record.reviewed_by_id = self.current_user.id
+                            saved_record.approved_by_id = self.current_user.id
+                            saved_record.status = 'approved'
+                        
+                        self.session.commit()
+                        
+                        QMessageBox.information(
+                            self,
+                            "Record Saved",
+                            f"Record created successfully!\n\n"
+                            f"Record Number: {record_number}\n"
+                            f"Status: {saved_record.status.title()}\n"
+                            f"Total Items: {total_items} ({sample_count} samples × {len(template.fields)} criteria)\n"
+                            f"Compliance: {saved_record.compliance_score:.1f}%\n"
+                            f"Passed: {passed} items\n"
+                            f"Failed: {failed} items\n\n"
+                            f"Batch: {saved_record.batch_number}\n"
+                            f"Product: {saved_record.product_id}"
+                        )
+                        
+                    except Exception as e:
+                        self.session.rollback()
+                        QMessageBox.warning(self, "Error", f"Failed to save record:\n{str(e)}")
+                        saved_record = None
+            
+            # Ask for PDF report
+            if saved_record:
+                pdf_response = QMessageBox.question(
+                    self,
+                    "PDF Report",
+                    "Do you want to generate a PDF report for this record?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                
+                if pdf_response == QMessageBox.StandardButton.Yes:
+                    try:
+                        pdf_filepath, _ = QFileDialog.getSaveFileName(
+                            self,
+                            "Save PDF Report",
+                            f"record_{saved_record.record_number}.pdf",
+                            "PDF Files (*.pdf)"
+                        )
+                        
+                        if pdf_filepath:
+                            from pdf_generator import PDFGenerator
+                            pdf_gen = PDFGenerator(self.session)
+                            pdf_gen.generate_record_pdf(saved_record, pdf_filepath)
+                            QMessageBox.information(
+                                self,
+                                "PDF Generated",
+                                f"PDF report generated successfully!\n\nSaved to:\n{pdf_filepath}"
+                            )
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to generate PDF:\n{str(e)}")
+                
+                # Ask for statistics PDF
+                stats_response = QMessageBox.question(
+                    self,
+                    "Statistics PDF",
+                    "Do you want to generate a statistics PDF report?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                
+                if stats_response == QMessageBox.StandardButton.Yes:
+                    try:
+                        stats_filepath, _ = QFileDialog.getSaveFileName(
+                            self,
+                            "Save Statistics PDF",
+                            f"statistics_{saved_record.record_number}.pdf",
+                            "PDF Files (*.pdf)"
+                        )
+                        
+                        if stats_filepath:
+                            from pdf_generator import PDFGenerator
+                            pdf_gen = PDFGenerator(self.session)
+                            pdf_gen.generate_statistical_report_pdf(saved_record, stats_filepath)
+                            QMessageBox.information(
+                                self,
+                                "Statistics PDF Generated",
+                                f"Statistics PDF generated successfully!\n\nSaved to:\n{stats_filepath}"
+                            )
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to generate statistics PDF:\n{str(e)}")
+                
+                # Ask for data-only export
+                data_export_response = QMessageBox.question(
+                    self,
+                    "Export Data",
+                    "Do you want to export data only (without template info)?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                
+                if data_export_response == QMessageBox.StandardButton.Yes:
+                    try:
+                        data_filepath, _ = QFileDialog.getSaveFileName(
+                            self,
+                            "Export Data Only",
+                            f"data_only_{saved_record.record_number}.xlsx",
+                            "Excel Files (*.xlsx)"
+                        )
+                        
+                        if data_filepath:
+                            excel_handler = ExcelHandler(self.session)
+                            excel_handler.export_record_data(saved_record, data_filepath)
+                            QMessageBox.information(
+                                self,
+                                "Data Exported",
+                                f"Data exported successfully!\n\nSaved to:\n{data_filepath}"
+                            )
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to export data:\n{str(e)}")
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to generate sample data:\n{str(e)}")
     

@@ -1,16 +1,16 @@
 {
-  "version": "1.0.4",
-  "release_date": "2026-02-12",
+  "version": "1.0.5",
+  "release_date": "2026-02-14",
   "linux": {
-    "url": "https://github.com/mzool/quality_system_desktop/releases/download/v1.0.4/QualitySystem-v1.0.4-x86_64.AppImage",
-    "sha256": "b8b0881ec8a19367c2d89d5be351a452d9b55061f809c71b5ec0516465707eba",
+    "url": "https://github.com/mzool/quality_system_desktop/releases/download/v1.0.5/QualitySystem-v1.0.5-x86_64.AppImage",
+    "sha256": "7be5f90c0c53475bad6c5ca5107a7e5049fb2e390b14dee859dd4b53b4ac4d6f",
     "size_mb": 231
   },
   "windows": {
-    "url": "https://github.com/mzool/quality_system_desktop/releases/download/v1.0.4/QualitySystem-v1.0.4-Windows-x86_64.exe",
-    "sha256": "77AFD20C263CC28D883527243BBB3B84E790EEAD4E619F6D7546DCB25020C008",
+    "url": "https://github.com/mzool/quality_system_desktop/releases/download/v1.0.5/QualitySystem-v1.0.5-Windows-x86_64.exe",
+    "sha256": "7DEE96DB6759981DA586F0E93C8614514405DFB5A506D601D75202A4F9B8DB19",
     "size_mb": 156
   },
-  "release_notes_url": "https://github.com/mzool/quality_system_desktop/releases/tag/v1.0.4",
+  "release_notes_url": "https://github.com/mzool/quality_system_desktop/releases/tag/v1.0.5",
   "minimum_version": "1.0.0"
 }
